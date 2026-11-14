@@ -83,8 +83,24 @@ fn NodeId parse_decl(Parser* p)
 		case CT_ERROR:
 			return parse_ct_error(p);
 		case STATIC:
-		case EXTERN:
 		case TLOCAL:
+			return parse_global(p);
+		case EXTERN:
+			// `extern` prefixes a fn/const/global declaration (grammar.y's
+			// top_level_decl lists `EXTERN func_definition` and
+			// `EXTERN const_declaration` alongside `EXTERN
+			// global_declaration`) -- only the global case is a storage
+			// prefix that parse_global's own loop already consumes.
+			if (p.peek_type(1) == FUNC)
+			{
+				p.advance();
+				return parse_fn(p);
+			}
+			if (p.peek_type(1) == CONST)
+			{
+				p.advance();
+				return parse_const(p);
+			}
 			return parse_global(p);
 		default:
 			if (p.at(IDENT) && p.peek().text == "excuse")
@@ -159,6 +175,27 @@ fn NodeId sync_member(Parser* p) @local
 		p.advance();
 	}
 	return p.error_node(ERROR_DECL, first);
+}
+
+<*
+ Consume a required name token of kind `t` and return its index; on failure
+ (already reported by `Parser.expect`), return `fallback` instead of the
+ un-consumed token's position.
+
+ Using the un-consumed token as a node's `tok` is unsafe: if nothing later
+ in the same declaration advances the cursor either (common on malformed
+ input, since the missing name usually means everything after it fails to
+ match too), the node's span freezes at or before that position while
+ `tok` points past it -- `tok` escaping the node's own `[first_tok,
+ last_tok]` range, which is exactly what docs/DESIGN.md section 6's first
+ invariant forbids. `fallback` must be a token already known to be
+ consumed -- the construct's own opening keyword, almost always.
+*>
+fn uint expect_name(Parser* p, TokenType t, String what, uint fallback) @local
+{
+	uint tok = p.pos;
+	if (p.expect(t, what)) return tok;
+	return fallback;
 }
 
 // --- Attributes --------------------------------------------------------------
@@ -310,8 +347,45 @@ fn bool looks_like_param_type_start(Parser* p) @local
 	TokenType t = p.peek_type();
 	if (is_base_type(t)) return true;
 	if (t == TYPE_IDENT || t == CT_TYPEOF || t == CT_TYPEFROM) return true;
-	if (t == IDENT && p.peek_type(1) == SCOPE) return true;
+	if (t == IDENT) return looks_like_qualified_type_path(p);
 	return false;
+}
+
+<*
+ True when the cursor starts a `foo::bar::Type` qualified type path --
+ i.e. one or more `IDENT '::'` segments followed by a `TYPE_IDENT`.
+
+ A single token of lookahead (just checking for `IDENT` then `SCOPE`) is
+ not enough: `env::X86_64` and `env::SomeType` both start that way, but
+ only the second is a type -- the first is a qualified *constant*
+ (`env::X86_64 ? uint : CUInt`, a real alias target in the corpus) and
+ must fall through to `parse_expr` instead. Walk the whole path with
+ lookahead, consuming nothing, and check what the final segment actually
+ is.
+*>
+fn bool looks_like_qualified_type_path(Parser* p) @local
+{
+	uint ahead = 0;
+	if (p.peek_type(ahead) != IDENT) return false;
+	ahead++;
+	while (p.peek_type(ahead) == SCOPE)
+	{
+		ahead++;
+		if (p.peek_type(ahead) == TYPE_IDENT) return true;
+		if (p.peek_type(ahead) != IDENT) return false;
+		ahead++;
+	}
+	return false;
+}
+
+<*
+ Like `looks_like_param_type_start`, but also accepts `$Type` (relevant
+ wherever a bare compile-time type placeholder can stand for a whole type,
+ e.g. `alias Foo = $Type;`, which parameter position never allows).
+*>
+fn bool looks_like_type_start(Parser* p) @local
+{
+	return looks_like_param_type_start(p) || p.at(CT_TYPE_IDENT);
 }
 
 <* One parameter: `type? ('...' | IDENT | '&' IDENT | '#'IDENT | $ident | $Type)? opt_attributes ('=' (expr|type))?`. *>
@@ -403,9 +477,30 @@ fn NodeId parse_param(Parser* p) @local
 <* `'(' parameters ')'`: a plain function/attrdef/fn-type parameter list. *>
 fn NodeId[] parse_parameters(Parser* p)
 {
+	if (!p.expect(LPAREN, "expected '('"))
+	{
+		List{NodeId} empty;
+		empty.tinit();
+		return empty.to_tarray();
+	}
+	NodeId[] params = parse_param_list(p);
+	p.expect(RPAREN, "expected ')'");
+	return params;
+}
+
+<*
+ The bare comma-separated parameter list, without the surrounding parens --
+ shared with `parse_expr.c3`'s call-argument grammar: `call_arg_list ::=
+ opt_arg_list (';' parameters)?` lets a call site declare typed block
+ parameters for a trailing macro body, e.g.
+ `@loop_over_addresses(ai; NativeSocket sockfd, AddrInfo* ai_candidate) { ... }`
+ in lib/std/net/tcp.c3. The caller owns the parens (or the `;` and `)` that
+ bound this list in the call-argument case); this just parses `parameters`.
+*>
+fn NodeId[] parse_param_list(Parser* p)
+{
 	List{NodeId} out;
 	out.tinit();
-	if (!p.expect(LPAREN, "expected '('")) return out.to_tarray();
 	while (!p.at(RPAREN) && !p.at(EOS) && !p.at_end())
 	{
 		uint before = p.pos;
@@ -413,7 +508,6 @@ fn NodeId[] parse_parameters(Parser* p)
 		if (p.pos == before) p.advance();
 		if (!p.match(COMMA)) break;
 	}
-	p.expect(RPAREN, "expected ')'");
 	return out.to_tarray();
 }
 
@@ -543,7 +637,8 @@ fn bool blocks_method_type(TokenType t) @local
 *>
 fn FuncHeader parse_func_macro_header(Parser* p, bool is_macro) @local
 {
-	FuncHeader h = { .rtype = NONE, .method_type = NONE, .name = p.pos };
+	uint first = p.pos;
+	FuncHeader h = { .rtype = NONE, .method_type = NONE, .name = first };
 
 	if (!(is_macro && looks_like_func_name(p, true)))
 	{
@@ -559,14 +654,19 @@ fn FuncHeader parse_func_macro_header(Parser* p, bool is_macro) @local
 		}
 	}
 
-	h.name = p.pos;
+	// `expect_name`-style fallback: a missing name must not leave `h.name`
+	// pointing at an un-consumed token. `first` is always already behind
+	// the cursor here (the header's own start, consumed via `parse_type`
+	// in every path except the bare-macro-name shortcut above, which
+	// never reaches this point with the cursor still at `first`).
 	if (p.at(IDENT) || (is_macro && p.at(AT_IDENT)))
 	{
-		p.advance();
+		h.name = p.advance();
 	}
 	else
 	{
 		p.error(is_macro ? "expected a macro name" : "expected a function name");
+		h.name = first;
 	}
 	return h;
 }
@@ -644,8 +744,7 @@ fn NodeId parse_attrdef(Parser* p, NodeKind kind) @local
 
 	uint first = p.pos;
 	p.advance();
-	uint name = p.pos;
-	p.expect(AT_TYPE_IDENT, "expected an attribute type name, like '@MyAttr'");
+	uint name = expect_name(p, AT_TYPE_IDENT, "expected an attribute type name, like '@MyAttr'", first);
 
 	List{NodeId} kids;
 	kids.tinit();
@@ -694,8 +793,7 @@ fn NodeId parse_struct_or_union(Parser* p) @local
 	uint first = p.pos;
 	NodeKind kind = p.at(STRUCT) ? STRUCT_DECL : UNION_DECL;
 	p.advance();
-	uint name = p.pos;
-	p.expect(TYPE_IDENT, "expected a type name");
+	uint name = expect_name(p, TYPE_IDENT, "expected a type name", first);
 	NodeId[] interfaces = parse_interface_impl_list(p);
 	NodeId[] attrs = parse_attributes(p);
 	NodeId[] members = parse_struct_body(p);
@@ -812,8 +910,7 @@ fn NodeId parse_bitstruct_decl(Parser* p) @local
 
 	uint first = p.pos;
 	p.advance();
-	uint name = p.pos;
-	p.expect(TYPE_IDENT, "expected a type name");
+	uint name = expect_name(p, TYPE_IDENT, "expected a type name", first);
 	NodeId[] interfaces = parse_interface_impl_list(p);
 	p.expect(COLON, "expected ':' followed by a bitstruct type");
 	NodeId container = parse_type_no_generic(p);
@@ -889,8 +986,7 @@ fn NodeId parse_enum_param(Parser* p) @local
 
 	uint first = p.pos;
 	NodeId type = parse_type(p);
-	uint name = p.pos;
-	p.expect(IDENT, "expected a parameter name");
+	uint name = expect_name(p, IDENT, "expected a parameter name", first);
 	NodeId[] attrs = parse_attributes(p);
 
 	List{NodeId} kids;
@@ -929,8 +1025,7 @@ fn NodeId parse_enum_constant(Parser* p, bool is_constset) @local
 	defer p.leave();
 
 	uint first = p.pos;
-	uint name = p.pos;
-	p.expect(CONST_IDENT, "expected a constant name");
+	uint name = expect_name(p, CONST_IDENT, "expected a constant name", first);
 	NodeId[] attrs = parse_attributes(p);
 
 	List{NodeId} kids;
@@ -965,8 +1060,7 @@ fn NodeId parse_enum_like(Parser* p, TokenType keyword) @local
 
 	uint first = p.pos;
 	p.advance();
-	uint name = p.pos;
-	p.expect(TYPE_IDENT, "expected a type name");
+	uint name = expect_name(p, TYPE_IDENT, "expected a type name", first);
 	NodeId[] interfaces = parse_interface_impl_list(p);
 
 	NodeId[] params = {};
@@ -1026,8 +1120,7 @@ fn NodeId parse_interface(Parser* p) @local
 
 	uint first = p.pos;
 	p.advance();
-	uint name = p.pos;
-	p.expect(TYPE_IDENT, "expected a type name");
+	uint name = expect_name(p, TYPE_IDENT, "expected a type name", first);
 
 	List{NodeId} kids;
 	kids.tinit();
@@ -1076,8 +1169,7 @@ fn NodeId parse_typedef(Parser* p) @local
 
 	uint first = p.pos;
 	p.advance();
-	uint name = p.pos;
-	p.expect(TYPE_IDENT, "expected a type name");
+	uint name = expect_name(p, TYPE_IDENT, "expected a type name", first);
 	NodeId[] interfaces = parse_interface_impl_list(p);
 	NodeId[] attrs = parse_attributes(p);
 	p.expect(EQ, "expected '='");
@@ -1097,6 +1189,22 @@ fn NodeId parse_typedef(Parser* p) @local
 
 <*
  `ALIAS alias_ident ';'` or `ALIAS TYPE_IDENT opt_attributes '=' (type|func_typedef) opt_attributes ';'`.
+
+ grammar.y calls the non-`fn` alternative `type`, but the REAL compiler's
+ `parse_alias_type` always calls `parse_expr` for it instead -- e.g.
+ `alias ListType = IS_SLICE ??? Type : Type*;` (a `???` compile-time
+ ternary) and `alias EnumSetType = type_for_enum_elements(ENUM_COUNT);`
+ (a call) are both common in the corpus, and neither is a `type`
+ production at all. But always using `parse_expr` is worse in practice:
+ lane 1A's expression grammar does not yet accept a bare type name with a
+ `*` or `{...}` postfix as a primary expression, and `alias X = Y*;` /
+ `alias X = Y{Z};` are far more common than the expression-only forms.
+ So: dispatch on whether the RHS *looks* type-shaped
+ (`looks_like_type_start`) and call `parse_type` only then, `parse_expr`
+ otherwise. This loses nothing `parse_type` alone could do and gains the
+ call/ternary/other-expression cases that lane 1A already supports
+ structurally (CALL, qualified paths) -- it only still fails on `???`,
+ which lane 1A hasn't implemented yet either way.
 *>
 fn NodeId parse_alias(Parser* p) @local
 {
@@ -1111,7 +1219,19 @@ fn NodeId parse_alias(Parser* p) @local
 		uint name = p.advance();
 		NodeId[] own_attrs = parse_attributes(p);
 		p.expect(EQ, "expected '='");
-		NodeId value = p.at(FUNC) ? parse_fn_type(p) : parse_type(p);
+		NodeId value;
+		if (p.at(FUNC))
+		{
+			value = parse_fn_type(p);
+		}
+		else if (looks_like_type_start(p))
+		{
+			value = parse_type(p);
+		}
+		else
+		{
+			value = parse_expr(p);
+		}
 		NodeId[] tail_attrs = parse_attributes(p);
 		p.expect(EOS, "expected ';'");
 
@@ -1167,8 +1287,7 @@ fn NodeId parse_const(Parser* p) @local
 
 	NodeId type = NONE;
 	if (!p.at(CONST_IDENT)) type = parse_type(p);
-	uint name = p.pos;
-	p.expect(CONST_IDENT, "expected a constant name");
+	uint name = expect_name(p, CONST_IDENT, "expected a constant name", first);
 	NodeId[] attrs = parse_attributes(p);
 
 	NodeId init = NONE;
@@ -1197,11 +1316,12 @@ fn NodeId parse_global(Parser* p) @local
 
 	NodeId type = parse_type(p);
 	uint name1 = p.pos;
-	p.expect(IDENT, "expected a variable name");
+	bool has_name1 = p.expect(IDENT, "expected a variable name");
 
 	List{NodeId} names;
 	names.tinit();
-	names.push(p.finish(IDENT, name1, name1));
+	if (has_name1) names.push(p.finish(IDENT, name1, name1));
+	if (!has_name1) name1 = first;
 
 	NodeId init = NONE;
 	if (p.match(EQ))
