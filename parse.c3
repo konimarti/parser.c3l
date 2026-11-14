@@ -255,7 +255,7 @@ fn NodeId Parser.parse_unit(&self)
 	return self.ast.add(BLOCK, 0, 0, last, range[0], range[1]);
 }
 
-fn NodeId[] Parser.collect_decls(&self) @local
+fn NodeId[] Parser.collect_decls(&self)
 {
 	List{NodeId} out;
 	out.tinit();
