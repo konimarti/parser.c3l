@@ -729,7 +729,11 @@ fn NodeId parse_lambda(Parser* p) @local
 		{
 			// Inferred lambda parameter without explicit type.
 			uint name_tok = p.advance();
-			NodeId param = p.finish(PARAM, name_tok, p_first, NONE, NONE);
+			// PARAM is list-bearing: children = [type, default, attrs...].
+			// See parse_decl.c3's parse_param, which defines this shape -- a
+			// lambda parameter is the same node kind as an ordinary one.
+			NodeId[<2>] inferred_range = p.ast.add_children({ NONE, NONE });
+			NodeId param = p.finish(PARAM, name_tok, p_first, inferred_range[0], inferred_range[1]);
 			sig_kids.push(param);
 		}
 		else
@@ -745,7 +749,8 @@ fn NodeId parse_lambda(Parser* p) @local
 			{
 				p_def = parse_expr(p, Prec.LOWEST);
 			}
-			NodeId param = p.finish(PARAM, name_tok, p_first, p_type, p_def);
+			NodeId[<2>] param_range = p.ast.add_children({ p_type, p_def });
+			NodeId param = p.finish(PARAM, name_tok, p_first, param_range[0], param_range[1]);
 			sig_kids.push(param);
 		}
 

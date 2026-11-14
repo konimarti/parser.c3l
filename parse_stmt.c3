@@ -118,6 +118,16 @@ fn NodeId parse_var_stmt(Parser* p) @local
 	return p.finish(VAR_DECL, name, first, NONE, init);
 }
 
+<*
+ `TYPE name = init, name2 = init2, ...;`: the declared type is shared across
+ every comma-separated name, so it cannot be threaded through `finish()`'s
+ ordinary lhs/rhs widening (each VAR_DECL has its own `init`, and `finish()`
+ is called once per name, before the shared type could be assigned). Each
+ node's span is widened by hand afterward to cover `ty`'s span once it is
+ attached -- otherwise invariant 1 breaks the moment the type starts before
+ the name `finish()` was given as this node's `first`, which is exactly what
+ `for (sz j = 10; ...)` and `char* current = ...;` both do.
+*>
 fn NodeId parse_decl_stmt(Parser* p) @local
 {
 	uint first = p.pos;
@@ -130,11 +140,18 @@ fn NodeId parse_decl_stmt(Parser* p) @local
 		p.advance();
 		NodeId init = NONE;
 		if (p.match(EQ)) init = parse_expr(p);
-		decls.push(p.finish(VAR_DECL, name, name, init));
+		decls.push(p.finish(VAR_DECL, name, first, init));
 	} while (p.match(COMMA));
 	if (!p.expect(EOS, "expected ';'")) return p.sync_stmt();
 	NodeId[] kids = decls.to_tarray();
-	foreach (id : kids) p.ast.node(id).lhs = ty;
+	Node* ty_node = p.ast.node(ty);
+	foreach (id : kids)
+	{
+		Node* n = p.ast.node(id);
+		n.lhs = ty;
+		if (ty_node.first_tok < n.first_tok) n.first_tok = ty_node.first_tok;
+		if (ty_node.last_tok > n.last_tok) n.last_tok = ty_node.last_tok;
+	}
 	return kids[0];
 }
 
@@ -243,6 +260,13 @@ fn NodeId parse_for_stmt(Parser* p) @local
 	uint first = p.pos; uint kw = p.advance(); NodeId label = parse_optional_label(p);
 	List{NodeId} kids; kids.tinit(); p.expect(LPAREN, "expected '(' after for");
 	if (p.at(EOS)) { p.advance(); kids.push(NONE); }
+	// `for (sz j = 10; ...)`: a declaration-shaped init clause. parse_decl_stmt
+	// consumes its own trailing ';', matching exactly the separator the
+	// for-loop header needs here. Missing this case does not just mis-parse
+	// one node -- parse_expr chokes on the bare type keyword and desyncs
+	// the whole clause sequence, which is what test/parser/conformance.c3
+	// caught on lib/std/sort/binarysearch.c3.
+	else if (is_local_decl_start(p.peek_type())) { kids.push(parse_decl_stmt(p)); }
 	else { kids.push(parse_expr(p)); while (p.match(COMMA)) parse_expr(p); p.expect(EOS, "expected ';' after for initializer"); }
 	if (p.at(EOS)) { p.advance(); kids.push(NONE); }
 	else { kids.push(parse_expr(p)); while (p.match(COMMA)) parse_expr(p); p.expect(EOS, "expected ';' after for condition"); }
@@ -368,11 +392,26 @@ fn NodeId parse_asm_stmt(Parser* p) @local
 	return p.finish(ASM_BLOCK, kw, first, range[0], range[1]);
 }
 
+<*
+ `yes`/`no` collect the branch bodies. Every statement-collecting loop here
+ guards forward progress the same way `parse_block` does: a construct that
+ desyncs the token stream (see `parse_for_stmt`'s declaration-init fix,
+ which this guard would otherwise have let spin forever on) must still
+ terminate, even if the resulting tree is wrong. See docs/DESIGN.md
+ section 4 and the Phase 1 gate (test/parser/conformance.c3), which is
+ what caught this.
+*>
 fn NodeId parse_ct_if_stmt(Parser* p) @local
 {
 	uint first = p.pos; uint kw = p.advance(); NodeId cond = parse_expr(p); p.expect(COLON, "expected ':' after $if");
 	List{NodeId} yes; yes.tinit(); List{NodeId} no; no.tinit(); bool in_else = false;
-	while (!p.at_end() && !p.at(CT_ENDIF)) { if (p.match(CT_ELSE)) { in_else = true; continue; }(in_else ? no : yes).push(parse_stmt(p)); }
+	while (!p.at_end() && !p.at(CT_ENDIF))
+	{
+		if (p.match(CT_ELSE)) { in_else = true; continue; }
+		uint before = p.pos;
+		(in_else ? no : yes).push(parse_stmt(p));
+		if (p.pos == before) p.advance();
+	}
 	p.expect(CT_ENDIF, "expected $endif");
 	NodeId[3] kids = { cond, make_block(p, yes), no.len() ? make_block(p, no) : NONE };
 	NodeId[<2>] range = p.ast.add_children(&kids); return p.finish(CT_IF, kw, first, range[0], range[1]);
@@ -402,7 +441,12 @@ fn NodeId parse_ct_switch_stmt(Parser* p) @local
 			if (is_case) value = is_local_decl_start(p.peek_type()) ? parse_type(p) : parse_expr(p);
 			p.expect(COLON, "expected ':' after compile-time switch arm");
 			List{NodeId} body; body.tinit();
-			while (!p.at_end() && !p.at(CT_CASE) && !p.at(CT_DEFAULT) && !p.at(CT_ENDSWITCH)) body.push(parse_stmt(p));
+			while (!p.at_end() && !p.at(CT_CASE) && !p.at(CT_DEFAULT) && !p.at(CT_ENDSWITCH))
+			{
+				uint before = p.pos;
+				body.push(parse_stmt(p));
+				if (p.pos == before) p.advance();
+			}
 			NodeId block = make_block(p, body);
 			kids.push(is_case ? p.finish(CASE, t, f, value, block) : p.finish(DEFAULT, t, f, block));
 		}
@@ -425,7 +469,12 @@ fn NodeId parse_ct_for_stmt(Parser* p) @local
 	if (!p.at(COLON)) inc = parse_expr(p);
 	while (p.match(COMMA)) parse_expr(p);
 	p.expect(COLON, "expected ':' after $for clauses"); List{NodeId} body; body.tinit();
-	while (!p.at_end() && !p.at(CT_ENDFOR)) body.push(parse_stmt(p));
+	while (!p.at_end() && !p.at(CT_ENDFOR))
+	{
+		uint before = p.pos;
+		body.push(parse_stmt(p));
+		if (p.pos == before) p.advance();
+	}
 	p.expect(CT_ENDFOR, "expected $endfor");
 	NodeId block = make_block(p, body); NodeId[4] kids = { init, cond, inc, block };
 	NodeId[<2>] range = p.ast.add_children(&kids);
@@ -441,7 +490,12 @@ fn NodeId parse_ct_foreach_stmt(Parser* p) @local
 	p.expect(COLON, "expected ':' after $foreach variables");
 	NodeId collection = parse_expr(p); p.expect(COLON, "expected ':' after $foreach collection");
 	List{NodeId} body; body.tinit();
-	while (!p.at_end() && !p.at(CT_ENDFOREACH)) body.push(parse_stmt(p));
+	while (!p.at_end() && !p.at(CT_ENDFOREACH))
+	{
+		uint before = p.pos;
+		body.push(parse_stmt(p));
+		if (p.pos == before) p.advance();
+	}
 	p.expect(CT_ENDFOREACH, "expected $endforeach"); NodeId block = make_block(p, body);
 	List{NodeId} kids; kids.tinit(); kids.push(collection); kids.push(block);
 	foreach (v : vars.to_tarray()) kids.push(v);
