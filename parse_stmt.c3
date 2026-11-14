@@ -109,8 +109,12 @@ fn bool is_expr_start(TokenType t) @local
 	{
 		case IDENT: case CONST_IDENT: case TYPE_IDENT: case INTEGER: case REAL:
 		case STRING: case CHAR_LITERAL: case BYTES: case TRUE: case FALSE: case NULL:
-		case LPAREN: case AMP: case STAR: case BIT_NOT: case BANG: case PLUS:
-		case MINUS: case PLUSPLUS: case MINUSMINUS: case TRY: case CATCH:
+		case LPAREN: case AMP: case AND: case STAR: case BIT_NOT: case BIT_XOR:
+		case BANG: case BANGBANG: case PLUS: case MINUS: case PLUSPLUS: case MINUSMINUS:
+		case ELLIPSIS: case AT_IDENT: case AT_TYPE_IDENT: case AT_CONST_IDENT:
+		case HASH_IDENT: case BUILTIN: case FUNC: case CT_DEFINED:
+		case CT_FEATURE: case CT_FEAT: case CT_EVAL: case CT_STRINGIFY: case CT_REFLECT:
+		case CT_TYPEOF: case CT_TYPEFROM: case LENGTHOF: case TRY: case CATCH:
 			return true;
 		default:
 			// A base type reaches here only when the dispatcher already
@@ -191,8 +195,9 @@ fn NodeId parse_decl_stmt(Parser* p) @local
 	do
 	{
 		uint name = p.pos;
-		if (!p.at(IDENT)) { p.error("expected a local name"); return p.sync_stmt(); }
+		if (!p.at(IDENT) && !p.at(CT_IDENT)) { p.error("expected a local name"); return p.sync_stmt(); }
 		p.advance();
+		skip_stmt_attributes(p);
 		NodeId init = NONE;
 		if (p.match(EQ)) init = parse_expr(p);
 		decls.push(p.finish(VAR_DECL, name, first, init));
@@ -230,7 +235,7 @@ fn NodeId parse_storage_decl_stmt(Parser* p) @local
 	{
 		uint name = p.pos;
 		if (!p.at(IDENT) && !p.at(CT_IDENT)) { p.error("expected a local name"); return p.sync_stmt(); }
-		p.advance(); NodeId value = NONE;
+		p.advance(); skip_stmt_attributes(p); NodeId value = NONE;
 		if (p.match(EQ)) value = parse_expr(p);
 		decls.push(p.finish(VAR_DECL, name, name, ty, value));
 	} while (p.match(COMMA));
@@ -288,6 +293,36 @@ fn NodeId parse_condition_list(Parser* p) @local
 fn NodeId parse_condition_item(Parser* p) @local
 {
 	uint first = p.pos;
+	if (p.at(TRY) || p.at(CATCH))
+	{
+		bool is_try = p.at(TRY); uint unwrap_tok = p.advance();
+		bool named = p.at(IDENT) && p.peek_type(1) == EQ;
+		if (!named)
+		{
+			uint saved = p.pos;
+			if (looks_like_local_decl(p))
+			{
+				NodeId maybe_ty = parse_type(p);
+				if ((p.at(IDENT) || p.at(CT_IDENT)) && p.peek_type(1) == EQ)
+				{
+					uint name = p.advance(); p.advance();
+					NodeId value = parse_expr(p);
+					NodeId wrapped = p.finish(is_try ? TRY_EXPR : CATCH_EXPR, unwrap_tok, first, value);
+					return p.finish(VAR_DECL, name, first, maybe_ty, wrapped);
+				}
+			}
+			p.pos = saved;
+		}
+		if (named)
+		{
+			uint name = p.advance(); p.advance();
+			NodeId value = parse_expr(p);
+			NodeId wrapped = p.finish(is_try ? TRY_EXPR : CATCH_EXPR, unwrap_tok, first, value);
+			return p.finish(VAR_DECL, name, first, NONE, wrapped);
+		}
+		p.pos = first;
+		return parse_expr(p);
+	}
 	if (p.at(VAR))
 	{
 		p.advance(); uint name = p.pos;
@@ -300,7 +335,7 @@ fn NodeId parse_condition_item(Parser* p) @local
 		NodeId value = parse_expr(p);
 		return p.finish(VAR_DECL, name, first, NONE, value);
 	}
-	if (looks_like_local_decl(p) || (p.at(CT_TYPE_IDENT) && p.peek_type(1) != EQ))
+	if (looks_like_local_decl(p) || looks_like_ct_condition_decl(p))
 	{
 		NodeId ty = parse_type(p); uint name = p.pos;
 		if (!p.at(IDENT) && !p.at(CT_IDENT))
@@ -308,11 +343,23 @@ fn NodeId parse_condition_item(Parser* p) @local
 			p.error("expected a local name after condition type");
 			return p.sync_stmt();
 		}
-		p.advance(); NodeId value = NONE;
+		p.advance(); skip_stmt_attributes(p); NodeId value = NONE;
 		if (p.match(EQ)) value = parse_expr(p);
 		return p.finish(VAR_DECL, name, first, ty, value);
 	}
 	return parse_expr(p);
+}
+
+fn bool looks_like_ct_condition_decl(Parser* p) @local
+{
+	if (!p.at(CT_TYPE_IDENT)) return false;
+	TokenType suffix = p.peek_type(1);
+	if (suffix == IDENT || suffix == CT_IDENT) return true;
+	if (suffix == STAR || suffix == QUESTION)
+	{
+		return p.peek_type(2) == IDENT || p.peek_type(2) == CT_IDENT;
+	}
+	return false;
 }
 
 fn NodeId parse_if_stmt(Parser* p) @local
@@ -363,9 +410,17 @@ fn NodeId parse_for_stmt(Parser* p) @local
 	// one node -- parse_expr chokes on the bare type keyword and desyncs
 	// the whole clause sequence, which is what test/parser/conformance.c3
 	// caught on lib/std/sort/binarysearch.c3.
-	else if (p.at(VAR)) { kids.push(parse_var_stmt(p)); }
-	else if (is_local_decl_start(p.peek_type())) { kids.push(parse_decl_stmt(p)); }
-	else { kids.push(parse_expr(p)); while (p.match(COMMA)) parse_expr(p); p.expect(EOS, "expected ';' after for initializer"); }
+	else
+	{
+		NodeId init = parse_for_init_item(p);
+		while (p.match(COMMA))
+		{
+			NodeId right = parse_for_init_item(p);
+			init = p.ast.add(BINARY, p.pos - 1, p.ast.node(init).first_tok, p.ast.node(right).last_tok, init, right);
+		}
+		kids.push(init);
+		p.expect(EOS, "expected ';' after for initializer");
+	}
 	if (p.at(EOS)) { p.advance(); kids.push(NONE); }
 	else { kids.push(parse_condition_list(p)); p.expect(EOS, "expected ';' after for condition"); }
 	NodeId inc = p.at(RPAREN) ? NONE : parse_expr(p);
@@ -374,6 +429,38 @@ fn NodeId parse_for_stmt(Parser* p) @local
 	NodeId[<2>] range = p.ast.add_children(kids.to_tarray());
 	NodeId n = p.finish(FOR, kw, first, range[0], range[1]);
 	return wrap_optional_label(p, label, n, first);
+}
+
+<* One `decl_or_expr` item in a for initializer; its comma and semicolon
+   separators belong to parse_for_stmt, so repeated typed declarations work. *>
+fn NodeId parse_for_init_item(Parser* p) @local
+{
+	uint first = p.pos;
+	if (p.match(VAR))
+	{
+		uint name = p.pos;
+		if (!p.at(IDENT) && !p.at(CT_IDENT))
+		{
+			p.error("expected a variable name in for initializer");
+			return p.error_node(ERROR_STMT, first);
+		}
+		p.advance(); p.expect(EQ, "expected '=' in for variable declaration");
+		NodeId value = parse_expr(p);
+		return p.finish(VAR_DECL, name, first, NONE, value);
+	}
+	if (looks_like_local_decl(p) || (p.at(CT_TYPE_IDENT) && p.peek_type(1) != EQ))
+	{
+		NodeId ty = parse_type(p); uint name = p.pos;
+		if (!p.at(IDENT) && !p.at(CT_IDENT))
+		{
+			p.error("expected a local name in for initializer");
+			return p.error_node(ERROR_STMT, first);
+		}
+		p.advance(); skip_stmt_attributes(p); NodeId value = NONE;
+		if (p.match(EQ)) value = parse_expr(p);
+		return p.finish(VAR_DECL, name, first, ty, value);
+	}
+	return parse_expr(p);
 }
 
 fn NodeId parse_foreach_stmt(Parser* p, bool reverse) @local
@@ -475,7 +562,13 @@ fn NodeId parse_defer_stmt(Parser* p) @local
 {
 	uint first = p.pos; uint kw = p.advance();
 	if (p.match(TRY) || p.match(CATCH)) {}
-	else if (p.match(LPAREN)) { p.expect(CATCH, "expected catch"); if (p.at(IDENT)) p.advance(); p.expect(RPAREN, "expected ')'"); }
+	else if (p.at(LPAREN) && p.peek_type(1) == CATCH)
+	{
+		p.advance(); p.advance();
+		if (!p.at(IDENT)) { p.error("expected catch variable"); }
+		else { p.advance(); }
+		p.expect(RPAREN, "expected ')'");
+	}
 	NodeId body = parse_stmt(p); return p.finish(DEFER, kw, first, body);
 }
 
@@ -560,7 +653,11 @@ fn NodeId parse_ct_switch_stmt(Parser* p) @local
 {
 	uint first = p.pos; uint kw = p.advance();
 	NodeId subject = NONE;
-	if (!p.at(COLON)) subject = is_local_decl_start(p.peek_type()) ? parse_type(p) : parse_expr(p);
+	if (!p.at(COLON))
+	{
+		bool type_property = p.peek_type(1) == SCOPE;
+		subject = is_local_decl_start(p.peek_type()) && !type_property ? parse_type(p) : parse_expr(p);
+	}
 	p.expect(COLON, "expected ':' after $switch subject");
 	List{NodeId} kids; kids.tinit(); kids.push(subject);
 	while (!p.at_end() && !p.at(CT_ENDSWITCH))
@@ -570,7 +667,8 @@ fn NodeId parse_ct_switch_stmt(Parser* p) @local
 			uint f = p.pos; bool is_case = p.at(CT_CASE); uint t = p.advance(); NodeId value = NONE;
 			if (is_case)
 			{
-				value = is_local_decl_start(p.peek_type()) ? parse_type(p) : parse_expr(p);
+				bool type_property = p.peek_type(1) == SCOPE;
+				value = is_local_decl_start(p.peek_type()) && !type_property ? parse_type(p) : parse_expr(p);
 				if (p.at(DOTDOT))
 				{
 					uint dots = p.advance(); NodeId high = parse_expr(p);
