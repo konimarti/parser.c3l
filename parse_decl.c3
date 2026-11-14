@@ -341,12 +341,31 @@ fn NodeId[] parse_interface_impl_list(Parser* p) @local
 
 // --- Parameters ---------------------------------------------------------------
 
-<* True when the cursor starts a parameter's type, per the real parser's `parse_next_is_typed_parameter`. *>
+<*
+ True when the cursor starts a parameter's type, per the real parser's
+ `parse_next_is_typed_parameter`.
+
+ A `TYPE_IDENT` or base-type keyword is always the terminal segment of a
+ type -- there is no type-grammar production where a type name is itself
+ followed by `::` and more type. So `Foo::` / `int::` immediately
+ disqualifies: that shape is always a type-PROPERTY access (`Foo::prop`,
+ `int::max`), which needs expression parsing (parse_expr.c3's
+ `parse_type_as_expr` already builds the right `::property`
+ MEMBER_ACCESS), not `parse_type`, which has no `::` suffix of its own
+ and would just stop after the bare name. Caught via a minimal repro:
+ `alias KeyFnReturnType = KeyFn::returns;` (lib/std/sort/
+ countingsort.c3) silently truncated to `alias KeyFnReturnType =
+ KeyFn;`, leaving `::returns` to desync the rest of the file -- this
+ only showed up with a real `TYPE_IDENT`-shaped alias name, since a
+ single-letter name like `T` lexes as `CONST_IDENT` and takes alias's
+ other (always-parse_expr) dispatch branch, masking the bug in a
+ same-looking but differently-routed repro.
+*>
 fn bool looks_like_param_type_start(Parser* p) @local
 {
 	TokenType t = p.peek_type();
-	if (is_base_type(t)) return true;
-	if (t == TYPE_IDENT || t == CT_TYPEOF || t == CT_TYPEFROM) return true;
+	if (t == TYPE_IDENT || is_base_type(t)) return p.peek_type(1) != SCOPE;
+	if (t == CT_TYPEOF || t == CT_TYPEFROM) return true;
 	if (t == IDENT) return looks_like_qualified_type_path(p);
 	return false;
 }
