@@ -46,7 +46,12 @@ fn NodeId parse_stmt(Parser* p)
 			{
 				return parse_label(p);
 			}
-			if (is_local_decl_start(p.peek_type())) return parse_decl_stmt(p);
+			// `int::max;` is a type-property expression, not the start of a
+			// local declaration, even though `int` alone is
+			// is_local_decl_start -- a bare type is never followed directly
+			// by '::' in a declaration, so this one token of lookahead is
+			// enough to disambiguate.
+			if (is_local_decl_start(p.peek_type()) && p.peek_type(1) != SCOPE) return parse_decl_stmt(p);
 			if (is_expr_start(p.peek_type())) return parse_expr_stmt(p);
 			p.error("expected a statement");
 			return p.sync_stmt();
@@ -62,7 +67,12 @@ fn bool is_expr_start(TokenType t) @local
 		case LPAREN: case AMP: case STAR: case BIT_NOT: case BANG: case PLUS:
 		case MINUS: case PLUSPLUS: case MINUSMINUS: case TRY: case CATCH:
 			return true;
-		default: return false;
+		default:
+			// A base type reaches here only when the dispatcher already
+			// ruled out a declaration (peek(1) != SCOPE): `int::max` is a
+			// type-property expression, which parse_prefix_or_primary
+			// already knows how to parse via parse_path_rest.
+			return is_base_type(t);
 	}
 }
 
