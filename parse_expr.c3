@@ -760,9 +760,26 @@ fn NodeId parse_postfix(Parser* p, NodeId lhs) @local
 			}
 
 			// Trailing compound statement / block (e.g. `@pool() { ... }`).
+			//
+			// no_init_list must be false while parsing the block's own
+			// body: it only needs to be true (if it is) for the call's
+			// *own* controlling position -- e.g. a call used as a bare
+			// expression-statement, where a `{` right after the call must
+			// read as this trailing block rather than an ambiguous
+			// initializer list. That doesn't apply to anything parsed
+			// *inside* the block: `@stack_mem(2048; Allocator mem) {
+			// ... return { .offset = ... }; ... };` has a brace
+			// initializer list nested in a `return` deep inside the body,
+			// and the no_init_list=true from the outer statement must not
+			// leak down into it. Restoring `saved` only after parse_block
+			// returns (as every other call in this file does around its
+			// own sub-parses) leaves it leaked for the whole body.
 			if (p.at(LBRACE))
 			{
+				bool saved_block = p.no_init_list;
+				p.no_init_list = false;
 				NodeId block = parse_block(p);
+				p.no_init_list = saved_block;
 				args.push(block);
 			}
 
