@@ -702,7 +702,8 @@ fn NodeId parse_ct_if_stmt(Parser* p) @local
 	{
 		if (p.match(CT_ELSE)) { in_else = true; continue; }
 		uint before = p.pos;
-		(in_else ? no : yes).push(parse_stmt(p));
+		NodeId stmt = parse_stmt(p);
+		if (in_else) { no.push(stmt); } else { yes.push(stmt); }
 		if (p.pos == before) p.advance();
 	}
 	p.expect(CT_ENDIF, "expected $endif");
