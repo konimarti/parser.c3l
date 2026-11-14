@@ -1,0 +1,14 @@
+{
+	"authors": [ "Koni Marti <koni.marti@gmail.com>" ],
+	"version": "0.1.0",
+	"output": "build",
+	"dependency-search-paths": [ "lib" ],
+	"dependencies": [ "lexer" ],
+	"sources": [ "*", "src/test/**" ],
+	"targets": {
+		"parser": {
+			"type": "static-lib",
+			"no-entry": true
+		}
+	}
+}
