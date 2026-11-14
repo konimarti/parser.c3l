@@ -479,3 +479,38 @@ fn void test_casts_paths_literals() @test
 		assert(r.ast.node(e).kind == STRING_LIT, "concatenated string is STRING_LIT");
 	}
 }
+
+<* Test 7: `$embed` -- a plain CALL on the builtin name, 1 or 2 arguments. *>
+fn void test_ct_embed() @test
+{
+	// 1. Filename only: `$embed("does_not_exist")`
+	{
+		ParseResult r = parse_snippet("$embed(\"does_not_exist\")");
+		defer r.free();
+		Report rep = invariants::check(&r);
+		assert(rep.spans_nest && rep.edges_valid, "invariants hold: %s", rep.detail);
+		assert(r.errors.len() == 0, "no parse errors");
+
+		NodeId e = get_expr(&r);
+		Node* n = r.ast.node(e);
+		assert(n.kind == CALL, "top is CALL");
+		NodeId[] kids = r.ast.children(e);
+		assert(kids.len == 2, "callee + 1 arg");
+		assert(r.ast.node(kids[0]).kind == CT_IDENT_EXPR, "callee is $embed");
+		assert(r.ast.node(kids[1]).kind == STRING_LIT, "arg is the filename");
+	}
+
+	// 2. Filename and length: `$embed("f", 4)`
+	{
+		ParseResult r = parse_snippet("$embed(\"f\", 4)");
+		defer r.free();
+		Report rep = invariants::check(&r);
+		assert(rep.spans_nest && rep.edges_valid, "invariants hold: %s", rep.detail);
+		assert(r.errors.len() == 0, "no parse errors");
+
+		NodeId e = get_expr(&r);
+		NodeId[] kids = r.ast.children(e);
+		assert(kids.len == 3, "callee + 2 args");
+		assert(r.ast.node(kids[2]).kind == INT_LIT, "second arg is the length");
+	}
+}

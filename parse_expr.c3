@@ -123,6 +123,7 @@ fn bool can_start_unary_expr(TokenType t)
 		case FUNC:
 		case CT_VAARG:
 		case CT_DEFINED:
+		case CT_EMBED:
 		case CT_FEATURE:
 		case CT_FEAT:
 		case CT_EVAL:
@@ -510,12 +511,16 @@ fn NodeId parse_prefix_or_primary(Parser* p, Prec min) @local
 		}
 
 		case CT_VAARG:
+		case CT_EMBED:
 		case CT_FEATURE:
 		case CT_FEAT:
 		case CT_EVAL:
 		case CT_STRINGIFY:
 		case CT_REFLECT:
 		{
+			// `$embed '(' constant_expr (',' constant_expr)? ')'` has no
+			// shape of its own beyond a plain call: filename and optional
+			// length are both just arguments, same as $eval/$feature/etc.
 			uint tok = p.advance();
 			return p.finish(CT_IDENT_EXPR, tok, first);
 		}

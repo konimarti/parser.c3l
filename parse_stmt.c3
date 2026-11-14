@@ -196,7 +196,7 @@ fn bool is_expr_start(TokenType t) @local
 		case LPAREN: case AMP: case AND: case STAR: case BIT_NOT: case BIT_XOR:
 		case BANG: case BANGBANG: case PLUS: case MINUS: case PLUSPLUS: case MINUSMINUS:
 		case ELLIPSIS: case AT_IDENT: case AT_TYPE_IDENT: case AT_CONST_IDENT:
-		case HASH_IDENT: case BUILTIN: case FUNC: case CT_DEFINED:
+		case HASH_IDENT: case BUILTIN: case FUNC: case CT_DEFINED: case CT_EMBED:
 		case CT_FEATURE: case CT_FEAT: case CT_EVAL: case CT_STRINGIFY: case CT_REFLECT:
 		case CT_TYPEOF: case CT_TYPEFROM: case LENGTHOF: case TRY: case CATCH:
 			return true;
