@@ -66,6 +66,11 @@ fn bool looks_like_local_decl(Parser* p) @local
 	TokenType first = p.peek_type();
 	if (is_local_decl_start(first))
 	{
+		if (first == TYPE_IDENT)
+		{
+			uint after = skip_type_lookahead_suffixes(p, 1, true);
+			if (p.peek_type(after) == DOT || p.peek_type(after) == SCOPE) return false;
+		}
 		// A built-in or unqualified type followed by :: is a type property
 		// expression (int::max), not a local declaration.
 		// Otherwise preserve the parser's original type-start dispatch. The
@@ -128,10 +133,58 @@ fn bool looks_like_local_decl(Parser* p) @local
 		if (component == TYPE_IDENT)
 		{
 			at++;
+			at = skip_type_lookahead_suffixes(p, at, true);
 			return p.peek_type(at) == IDENT || p.peek_type(at) == CT_IDENT;
 		}
 		if (component != IDENT) return false;
 	}
+}
+
+<* Advance a lookahead index past generic arguments and ordinary type suffixes. *>
+fn uint skip_type_lookahead_suffixes(Parser* p, uint at, bool allow_generic) @local
+{
+	if (allow_generic && p.peek_type(at) == LBRACE)
+	{
+		int braces = 1; at++;
+		while (braces > 0 && p.peek_type(at) != EOF)
+		{
+			if (p.peek_type(at) == LBRACE) braces++;
+			if (p.peek_type(at) == RBRACE) braces--;
+			at++;
+		}
+		if (braces != 0) return at;
+	}
+	while (true)
+	{
+		TokenType suffix = p.peek_type(at);
+		if (suffix == STAR || suffix == QUESTION)
+		{
+			at++;
+			continue;
+		}
+		if (suffix == LBRACKET)
+		{
+			int brackets = 1; at++;
+			while (brackets > 0 && p.peek_type(at) != EOF)
+			{
+				if (p.peek_type(at) == LBRACKET) brackets++;
+				if (p.peek_type(at) == RBRACKET) brackets--;
+				at++;
+			}
+			if (brackets != 0) return at;
+			continue;
+		}
+		if (suffix == LVEC)
+		{
+			at++;
+			while (p.peek_type(at) != RVEC && p.peek_type(at) != EOF) at++;
+			if (p.peek_type(at) != RVEC) return at;
+			at++;
+			continue;
+		}
+		break;
+	}
+	return at;
 }
 
 fn bool is_expr_start(TokenType t) @local
