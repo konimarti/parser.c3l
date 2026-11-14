@@ -1,52 +1,78 @@
-<*
- Statement grammar.
-
- LANE 1B (codex). Phase 0 leaves a minimal stub: blocks, empty statements and
- expression statements. All 28 statement forms of grammar.y's `statement`
- production -- control flow, switch/case/nextcase, foreach, defer, assert,
- labels, $if/$switch/$for/$foreach and asm blocks -- are lane 1B's work.
- See docs/WORKPLAN.md lane 1B.
-*>
+<* Statement grammar; see grammar.y and DESIGN.md section 4. *>
 module c3::parser;
 
 import c3::lexer;
 import std::collections::list;
 
-<* Parse one statement. *>
 fn NodeId parse_stmt(Parser* p)
 {
 	if (!p.enter()) return p.sync_stmt();
 	defer p.leave();
-
 	uint first = p.pos;
 	switch (p.peek_type())
 	{
-		case LBRACE:
-			return parse_block(p);
-		case EOS:
-			return p.finish(EMPTY_STMT, p.advance(), first);
+		case LBRACE: return parse_block(p);
+		case EOS: return p.finish(EMPTY_STMT, p.advance(), first);
+		case VAR: return parse_var_stmt(p);
+		case CONST: return parse_local_const_stmt(p);
+		case STATIC: case TLOCAL: return parse_storage_decl_stmt(p);
+		case RETURN: return parse_return_stmt(p);
+		case IF: return parse_if_stmt(p);
+		case WHILE: return parse_while_stmt(p);
+		case DO: return parse_do_stmt(p);
+		case FOR: return parse_for_stmt(p);
+		case FOREACH: return parse_foreach_stmt(p, false);
+		case FOREACH_R: return parse_foreach_stmt(p, true);
+		case SWITCH: return parse_switch_stmt(p);
+		case CASE: return parse_case_stmt(p);
+		case DEFAULT: return parse_default_stmt(p);
+		case NEXTCASE: return parse_nextcase_stmt(p);
+		case BREAK: return parse_jump_stmt(p, BREAK);
+		case CONTINUE: return parse_jump_stmt(p, CONTINUE);
+		case DEFER: return parse_defer_stmt(p);
+		case ASSERT: return parse_assert_stmt(p);
+		case ASM: return parse_asm_stmt(p);
+		case CT_IF: return parse_ct_if_stmt(p);
+		case CT_SWITCH: return parse_ct_switch_stmt(p);
+		case CT_FOR: return parse_ct_for_stmt(p);
+		case CT_FOREACH: return parse_ct_foreach_stmt(p);
+		case CT_ECHO: return parse_ct_line_stmt(p, CT_ECHO);
+		case CT_ASSERT: return parse_ct_line_stmt(p, CT_ASSERT);
+		case CT_ERROR: return parse_ct_line_stmt(p, CT_ERROR);
+		case CT_EXPAND: return parse_ct_line_stmt(p, CT_EXPAND);
+		case CT_TYPE_IDENT: return parse_ct_type_stmt(p);
 		default:
-			// An expression in statement position: `{` opens a block here,
-			// not an initializer list.
-			bool saved = p.no_init_list;
-			p.no_init_list = true;
-			NodeId e = parse_expr(p);
-			p.no_init_list = saved;
-			p.expect(EOS, "expected ';'");
-			return p.finish(EXPR_STMT, first, first, e);
+			if (p.peek_type() == CONST_IDENT && p.peek_type(1) == COLON)
+			{
+				return parse_label(p);
+			}
+			if (is_local_decl_start(p.peek_type())) return parse_decl_stmt(p);
+			if (is_expr_start(p.peek_type())) return parse_expr_stmt(p);
+			p.error("expected a statement");
+			return p.sync_stmt();
 	}
 }
 
-<* Parse a `{ ... }` block. The cursor must be on the `{`. *>
+fn bool is_expr_start(TokenType t) @local
+{
+	switch (t)
+	{
+		case IDENT: case CONST_IDENT: case TYPE_IDENT: case INTEGER: case REAL:
+		case STRING: case CHAR_LITERAL: case BYTES: case TRUE: case FALSE: case NULL:
+		case LPAREN: case AMP: case STAR: case BIT_NOT: case BANG: case PLUS:
+		case MINUS: case PLUSPLUS: case MINUSMINUS: case TRY: case CATCH:
+			return true;
+		default: return false;
+	}
+}
+
 fn NodeId parse_block(Parser* p)
 {
 	if (!p.enter()) return p.sync_stmt();
 	defer p.leave();
-
 	uint first = p.pos;
 	uint brace = p.pos;
 	if (!p.expect(LBRACE, "expected '{'")) return p.sync_stmt();
-
 	List{NodeId} kids;
 	kids.tinit();
 	while (!p.at_end() && !p.at(RBRACE))
@@ -56,7 +82,393 @@ fn NodeId parse_block(Parser* p)
 		if (p.pos == before) p.advance();
 	}
 	p.expect(RBRACE, "expected '}'");
-
 	NodeId[<2>] range = p.ast.add_children(kids.to_tarray());
 	return p.finish(BLOCK, brace, first, range[0], range[1]);
+}
+
+fn bool is_local_decl_start(TokenType t)
+{
+	switch (t)
+	{
+		case VOID: case BOOL: case CHAR: case ICHAR: case SHORT: case USHORT:
+		case INT: case UINT: case LONG: case ULONG: case INT128: case UINT128:
+		case FLOAT: case DOUBLE: case FLOAT16: case BFLOAT: case FLOAT128:
+		case IPTR: case UPTR: case ISZ: case USZ: case FAULT: case ANY:
+		case TYPEID: case UNTYPEDLIST: case TYPE_IDENT:
+			return true;
+		default: return false;
+	}
+}
+
+fn NodeId parse_var_stmt(Parser* p) @local
+{
+	uint first = p.pos; uint kw = p.advance();
+	uint name = p.pos;
+	if (!p.at(IDENT) && !p.at(CT_IDENT) && !p.at(CT_TYPE_IDENT))
+	{
+		p.error("expected a variable name"); return p.sync_stmt();
+	}
+	bool ct_type = p.at(CT_TYPE_IDENT);
+	bool ct_name = p.at(CT_IDENT);
+	name = p.advance();
+	NodeId init = NONE;
+	if (p.match(EQ)) { init = ct_type ? parse_type(p) : parse_expr(p); }
+	else if (!ct_type && !ct_name) { p.error("expected '=' in variable declaration"); return p.sync_stmt(); }
+	if (!p.expect(EOS, "expected ';'")) return p.sync_stmt();
+	return p.finish(VAR_DECL, name, first, NONE, init);
+}
+
+fn NodeId parse_decl_stmt(Parser* p) @local
+{
+	uint first = p.pos;
+	NodeId ty = parse_type(p);
+	List{NodeId} decls; decls.tinit();
+	do
+	{
+		uint name = p.pos;
+		if (!p.at(IDENT)) { p.error("expected a local name"); return p.sync_stmt(); }
+		p.advance();
+		NodeId init = NONE;
+		if (p.match(EQ)) init = parse_expr(p);
+		decls.push(p.finish(VAR_DECL, name, name, init));
+	} while (p.match(COMMA));
+	if (!p.expect(EOS, "expected ';'")) return p.sync_stmt();
+	NodeId[] kids = decls.to_tarray();
+	foreach (id : kids) p.ast.node(id).lhs = ty;
+	return kids[0];
+}
+
+fn NodeId parse_local_const_stmt(Parser* p) @local
+{
+	uint first = p.pos; uint kw = p.advance(); NodeId ty = NONE;
+	if (!p.at(CONST_IDENT)) ty = parse_type(p);
+	uint name = p.pos;
+	if (!p.at(CONST_IDENT)) { p.error("expected a constant name"); return p.sync_stmt(); }
+	p.advance(); NodeId value = NONE;
+	if (p.match(EQ)) value = parse_expr(p);
+	if (!p.expect(EOS, "expected ';' after constant declaration")) return p.sync_stmt();
+	return p.finish(VAR_DECL, name, first, ty, value);
+}
+
+fn NodeId parse_storage_decl_stmt(Parser* p) @local
+{
+	uint first = p.pos; p.advance();
+	NodeId ty = parse_type(p); List{NodeId} decls; decls.tinit();
+	do
+	{
+		uint name = p.pos;
+		if (!p.at(IDENT) && !p.at(CT_IDENT)) { p.error("expected a local name"); return p.sync_stmt(); }
+		p.advance(); NodeId value = NONE;
+		if (p.match(EQ)) value = parse_expr(p);
+		decls.push(p.finish(VAR_DECL, name, name, ty, value));
+	} while (p.match(COMMA));
+	if (!p.expect(EOS, "expected ';' after local declaration")) return p.sync_stmt();
+	return decls[0];
+}
+
+fn NodeId parse_return_stmt(Parser* p) @local
+{
+	uint first = p.pos; uint kw = p.advance();
+	NodeId value = NONE;
+	if (!p.at(EOS)) value = parse_expr(p);
+	if (!p.expect(EOS, "expected ';'")) return p.sync_stmt();
+	return p.finish(RETURN, kw, first, value);
+}
+
+fn NodeId parse_label(Parser* p) @local
+{
+	uint first = p.pos; uint name = p.advance(); p.advance();
+	NodeId target = parse_stmt(p);
+	return p.finish(LABEL, name, first, target);
+}
+
+fn NodeId parse_optional_label(Parser* p) @local
+{
+	if (p.at(CONST_IDENT) && p.peek_type(1) == COLON)
+	{
+		uint first = p.pos; uint name = p.advance(); p.advance();
+		return p.finish(IDENT, name, first);
+	}
+	return NONE;
+}
+
+fn NodeId parse_condition(Parser* p) @local
+{
+	p.expect(LPAREN, "expected '('");
+	NodeId cond = parse_expr(p);
+	while (p.match(COMMA)) parse_expr(p);
+	p.expect(RPAREN, "expected ')' after condition");
+	return cond;
+}
+
+fn NodeId parse_if_stmt(Parser* p) @local
+{
+	uint first = p.pos; uint kw = p.advance();
+	NodeId label = parse_optional_label(p);
+	NodeId cond = parse_condition(p);
+	NodeId yes = parse_stmt(p); NodeId no = NONE;
+	if (p.match(ELSE)) { no = parse_stmt(p); }
+	NodeId[3] kids = { cond, yes, no };
+	NodeId[<2>] range = p.ast.add_children(&kids);
+	NodeId n = p.finish(IF, kw, first, range[0], range[1]);
+	return wrap_optional_label(p, label, n, first);
+}
+
+fn NodeId wrap_optional_label(Parser* p, NodeId label, NodeId target, uint first) @local
+{
+	if (!label) return target;
+	return p.finish(LABEL, p.ast.node(label).tok, first, target);
+}
+
+fn NodeId parse_while_stmt(Parser* p) @local
+{
+	uint first = p.pos; uint kw = p.advance(); NodeId label = parse_optional_label(p);
+	NodeId cond = parse_condition(p); NodeId body = parse_stmt(p);
+	NodeId n = p.finish(WHILE, kw, first, cond, body);
+	return wrap_optional_label(p, label, n, first);
+}
+
+fn NodeId parse_do_stmt(Parser* p) @local
+{
+	uint first = p.pos; uint kw = p.advance(); NodeId label = parse_optional_label(p);
+	NodeId body = parse_block(p); NodeId cond = NONE;
+	if (p.match(WHILE)) { cond = parse_condition(p); p.expect(EOS, "expected ';' after do-while"); }
+	else { p.expect(EOS, "expected ';' after do block"); }
+	NodeId n = p.finish(DO, kw, first, body, cond);
+	return wrap_optional_label(p, label, n, first);
+}
+
+fn NodeId parse_for_stmt(Parser* p) @local
+{
+	uint first = p.pos; uint kw = p.advance(); NodeId label = parse_optional_label(p);
+	List{NodeId} kids; kids.tinit(); p.expect(LPAREN, "expected '(' after for");
+	if (p.at(EOS)) { p.advance(); kids.push(NONE); }
+	else { kids.push(parse_expr(p)); while (p.match(COMMA)) parse_expr(p); p.expect(EOS, "expected ';' after for initializer"); }
+	if (p.at(EOS)) { p.advance(); kids.push(NONE); }
+	else { kids.push(parse_expr(p)); while (p.match(COMMA)) parse_expr(p); p.expect(EOS, "expected ';' after for condition"); }
+	NodeId inc = p.at(RPAREN) ? NONE : parse_expr(p);
+	while (p.match(COMMA)) parse_expr(p); kids.push(inc);
+	p.expect(RPAREN, "expected ')' after for clauses"); kids.push(parse_stmt(p));
+	NodeId[<2>] range = p.ast.add_children(kids.to_tarray());
+	NodeId n = p.finish(FOR, kw, first, range[0], range[1]);
+	return wrap_optional_label(p, label, n, first);
+}
+
+fn NodeId parse_foreach_stmt(Parser* p, bool reverse) @local
+{
+	uint first = p.pos; uint kw = p.advance(); NodeId label = parse_optional_label(p);
+	List{NodeId} vars; vars.tinit(); p.expect(LPAREN, "expected '(' after foreach");
+	do
+	{
+		NodeId ty = NONE;
+		if (is_local_decl_start(p.peek_type())) ty = parse_type(p);
+		p.match(AMP);
+		uint name = p.pos;
+		if (!p.at(IDENT)) { p.error("expected foreach variable"); return p.sync_stmt(); }
+		p.advance(); vars.push(p.finish(IDENT, name, name, ty));
+	} while (p.match(COMMA));
+	p.expect(COLON, "expected ':' before collection");
+	NodeId collection = parse_expr(p); p.expect(RPAREN, "expected ')' after foreach");
+	NodeId body = parse_stmt(p); List{NodeId} kids; kids.tinit();
+	kids.push(collection); kids.push(body); foreach (v : vars.to_tarray()) kids.push(v);
+	NodeId[<2>] range = p.ast.add_children(kids.to_tarray());
+	NodeId n = p.finish(reverse ? FOREACH_R : FOREACH, kw, first, range[0], range[1]);
+	return wrap_optional_label(p, label, n, first);
+}
+
+fn NodeId parse_switch_stmt(Parser* p) @local
+{
+	uint first = p.pos; uint kw = p.advance(); NodeId label = parse_optional_label(p);
+	NodeId subject = NONE;
+	if (p.at(LPAREN)) subject = parse_condition(p);
+	p.expect(LBRACE, "expected '{' after switch"); List{NodeId} kids; kids.tinit(); kids.push(subject);
+	while (!p.at_end() && !p.at(RBRACE))
+	{
+		uint before = p.pos; kids.push(parse_stmt(p)); if (p.pos == before) p.advance();
+	}
+	p.expect(RBRACE, "expected '}' after switch");
+	NodeId[<2>] range = p.ast.add_children(kids.to_tarray());
+	NodeId n = p.finish(SWITCH, kw, first, range[0], range[1]);
+	return wrap_optional_label(p, label, n, first);
+}
+
+fn NodeId parse_case_stmt(Parser* p) @local
+{
+	uint first = p.pos; uint kw = p.advance(); NodeId label = parse_expr(p);
+	if (p.match(DOTDOT)) parse_expr(p);
+	p.expect(COLON, "expected ':' after case");
+	List{NodeId} body; body.tinit();
+	while (!p.at_end() && !p.at(RBRACE) && !p.at(CASE) && !p.at(DEFAULT)) body.push(parse_stmt(p));
+	NodeId body_node = make_block(p, body);
+	return p.finish(CASE, kw, first, label, body_node);
+}
+
+fn NodeId parse_default_stmt(Parser* p) @local
+{
+	uint first = p.pos; uint kw = p.advance(); p.expect(COLON, "expected ':' after default");
+	List{NodeId} body; body.tinit();
+	while (!p.at_end() && !p.at(RBRACE) && !p.at(CASE) && !p.at(DEFAULT)) body.push(parse_stmt(p));
+	NodeId body_node = make_block(p, body);
+	return p.finish(DEFAULT, kw, first, body_node);
+}
+
+fn NodeId parse_nextcase_stmt(Parser* p) @local
+{
+	uint first = p.pos; uint kw = p.advance(); NodeId label = NONE; NodeId value = NONE;
+	if (p.at(CONST_IDENT) && p.peek_type(1) == COLON)
+	{ uint tok = p.advance(); label = p.finish(IDENT, tok, tok); p.advance(); }
+	if (!p.at(EOS) && !p.at(DEFAULT)) { value = parse_expr(p); }
+	else if (p.match(DEFAULT)) { value = p.finish(DEFAULT, p.pos - 1, p.pos - 1); }
+	p.expect(EOS, "expected ';' after nextcase"); NodeId[2] kids = { label, value };
+	NodeId[<2>] range = p.ast.add_children(&kids);
+	return p.finish(NEXTCASE, kw, first, range[0], range[1]);
+}
+
+fn NodeId parse_jump_stmt(Parser* p, NodeKind kind) @local
+{
+	uint first = p.pos; uint kw = p.advance(); NodeId label = NONE;
+	if (p.at(CONST_IDENT)) { uint t = p.advance(); label = p.finish(IDENT, t, t); }
+	if (!p.expect(EOS, "expected ';' after jump")) return p.sync_stmt();
+	return p.finish(kind, kw, first, label);
+}
+
+fn NodeId parse_defer_stmt(Parser* p) @local
+{
+	uint first = p.pos; uint kw = p.advance();
+	if (p.match(TRY) || p.match(CATCH)) {}
+	else if (p.match(LPAREN)) { p.expect(CATCH, "expected catch"); if (p.at(IDENT)) p.advance(); p.expect(RPAREN, "expected ')'"); }
+	NodeId body = parse_stmt(p); return p.finish(DEFER, kw, first, body);
+}
+
+fn NodeId parse_assert_stmt(Parser* p) @local
+{
+	uint first = p.pos; uint kw = p.advance(); List{NodeId} kids; kids.tinit();
+	p.expect(LPAREN, "expected '(' after assert");
+	if (!p.at(RPAREN)) do { kids.push(parse_expr(p)); } while (p.match(COMMA));
+	p.expect(RPAREN, "expected ')' after assert"); p.expect(EOS, "expected ';' after assert");
+	NodeId[<2>] range = p.ast.add_children(kids.to_tarray());
+	return p.finish(ASSERT, kw, first, range[0], range[1]);
+}
+
+fn NodeId parse_asm_stmt(Parser* p) @local
+{
+	uint first = p.pos; uint kw = p.advance(); uint open = p.pos;
+	if (p.match(LPAREN))
+	{
+		int d = 1; while (!p.at_end() && d > 0) { if (p.at(LPAREN)) d++; if (p.at(RPAREN)) d--; p.advance(); }
+		p.expect(EOS, "expected ';' after asm");
+	}
+	else
+	{
+		p.match(AT_IDENT); p.expect(LBRACE, "expected '{' after asm"); int d = 1;
+		while (!p.at_end() && d > 0) { if (p.at(LBRACE)) d++; if (p.at(RBRACE)) d--; p.advance(); }
+	}
+	List{NodeId} no_kids; no_kids.tinit();
+	NodeId[<2>] range = p.ast.add_children(no_kids.to_tarray());
+	return p.finish(ASM_BLOCK, kw, first, range[0], range[1]);
+}
+
+fn NodeId parse_ct_if_stmt(Parser* p) @local
+{
+	uint first = p.pos; uint kw = p.advance(); NodeId cond = parse_expr(p); p.expect(COLON, "expected ':' after $if");
+	List{NodeId} yes; yes.tinit(); List{NodeId} no; no.tinit(); bool in_else = false;
+	while (!p.at_end() && !p.at(CT_ENDIF)) { if (p.match(CT_ELSE)) { in_else = true; continue; }(in_else ? no : yes).push(parse_stmt(p)); }
+	p.expect(CT_ENDIF, "expected $endif");
+	NodeId[3] kids = { cond, make_block(p, yes), no.len() ? make_block(p, no) : NONE };
+	NodeId[<2>] range = p.ast.add_children(&kids); return p.finish(CT_IF, kw, first, range[0], range[1]);
+}
+
+fn NodeId make_block(Parser* p, List{NodeId} kids) @local
+{
+	NodeId[] items = kids.to_tarray();
+	NodeId[<2>] range = p.ast.add_children(items);
+	uint first = items.len ? p.ast.node(items[0]).first_tok : p.pos;
+	uint last = items.len ? p.ast.node(items[items.len - 1]).last_tok : first;
+	return p.ast.add(BLOCK, first, first, last, range[0], range[1]);
+}
+
+fn NodeId parse_ct_switch_stmt(Parser* p) @local
+{
+	uint first = p.pos; uint kw = p.advance();
+	NodeId subject = NONE;
+	if (!p.at(COLON)) subject = is_local_decl_start(p.peek_type()) ? parse_type(p) : parse_expr(p);
+	p.expect(COLON, "expected ':' after $switch subject");
+	List{NodeId} kids; kids.tinit(); kids.push(subject);
+	while (!p.at_end() && !p.at(CT_ENDSWITCH))
+	{
+		if (p.at(CT_CASE) || p.at(CT_DEFAULT))
+		{
+			uint f = p.pos; bool is_case = p.at(CT_CASE); uint t = p.advance(); NodeId value = NONE;
+			if (is_case) value = is_local_decl_start(p.peek_type()) ? parse_type(p) : parse_expr(p);
+			p.expect(COLON, "expected ':' after compile-time switch arm");
+			List{NodeId} body; body.tinit();
+			while (!p.at_end() && !p.at(CT_CASE) && !p.at(CT_DEFAULT) && !p.at(CT_ENDSWITCH)) body.push(parse_stmt(p));
+			NodeId block = make_block(p, body);
+			kids.push(is_case ? p.finish(CASE, t, f, value, block) : p.finish(DEFAULT, t, f, block));
+		}
+		else { p.error("expected $case or $default in $switch"); kids.push(p.sync_stmt()); }
+	}
+	p.expect(CT_ENDSWITCH, "expected $endswitch"); NodeId[<2>] range = p.ast.add_children(kids.to_tarray());
+	return p.finish(CT_SWITCH, kw, first, range[0], range[1]);
+}
+
+fn NodeId parse_ct_for_stmt(Parser* p) @local
+{
+	uint first = p.pos; uint kw = p.advance();
+	NodeId init = NONE; NodeId cond = NONE; NodeId inc = NONE;
+	if (!p.at(EOS)) init = parse_expr(p);
+	while (p.match(COMMA)) parse_expr(p);
+	p.expect(EOS, "expected ';' after $for initializer");
+	if (!p.at(EOS)) cond = parse_expr(p);
+	while (p.match(COMMA)) parse_expr(p);
+	p.expect(EOS, "expected ';' after $for condition");
+	if (!p.at(COLON)) inc = parse_expr(p);
+	while (p.match(COMMA)) parse_expr(p);
+	p.expect(COLON, "expected ':' after $for clauses"); List{NodeId} body; body.tinit();
+	while (!p.at_end() && !p.at(CT_ENDFOR)) body.push(parse_stmt(p));
+	p.expect(CT_ENDFOR, "expected $endfor");
+	NodeId block = make_block(p, body); NodeId[4] kids = { init, cond, inc, block };
+	NodeId[<2>] range = p.ast.add_children(&kids);
+	return p.finish(CT_FOR, kw, first, range[0], range[1]);
+}
+
+fn NodeId parse_ct_foreach_stmt(Parser* p) @local
+{
+	uint first = p.pos; uint kw = p.advance();
+	List{NodeId} vars; vars.tinit();
+	if (p.at(CT_IDENT)) { uint v = p.advance(); vars.push(p.finish(IDENT, v, v)); }
+	if (p.match(COMMA) && p.at(CT_IDENT)) { uint v = p.advance(); vars.push(p.finish(IDENT, v, v)); }
+	p.expect(COLON, "expected ':' after $foreach variables");
+	NodeId collection = parse_expr(p); p.expect(COLON, "expected ':' after $foreach collection");
+	List{NodeId} body; body.tinit();
+	while (!p.at_end() && !p.at(CT_ENDFOREACH)) body.push(parse_stmt(p));
+	p.expect(CT_ENDFOREACH, "expected $endforeach"); NodeId block = make_block(p, body);
+	List{NodeId} kids; kids.tinit(); kids.push(collection); kids.push(block);
+	foreach (v : vars.to_tarray()) kids.push(v);
+	NodeId[<2>] range = p.ast.add_children(kids.to_tarray());
+	return p.finish(CT_FOREACH, kw, first, range[0], range[1]);
+}
+
+fn NodeId parse_ct_line_stmt(Parser* p, TokenType marker) @local
+{
+	uint first = p.pos; uint kw = p.advance();
+	while (!p.at_end() && !p.at(EOS)) p.advance(); p.expect(EOS, "expected ';' after compile-time statement");
+	return p.finish(marker == CT_ECHO ? CT_ECHO_DECL : marker == CT_ASSERT ? CT_ASSERT_DECL : marker == CT_ERROR ? CT_ERROR_DECL : CT_EXPAND, kw, first);
+}
+
+fn NodeId parse_ct_type_stmt(Parser* p) @local
+{
+	uint first = p.pos; uint kw = p.advance(); p.expect(EQ, "expected '=' after compile-time type");
+	parse_type(p); p.expect(EOS, "expected ';' after compile-time type");
+	return p.finish(CT_EXPAND, kw, first);
+}
+
+fn NodeId parse_expr_stmt(Parser* p) @local
+{
+	uint first = p.pos;
+	bool saved = p.no_init_list; p.no_init_list = true;
+	NodeId e = parse_expr(p); p.no_init_list = saved;
+	if (p.ast.kind(e) == ERROR_EXPR) return p.sync_stmt();
+	if (!p.expect(EOS, "expected ';'")) return p.sync_stmt();
+	return p.finish(EXPR_STMT, first, first, e);
 }
