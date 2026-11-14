@@ -6,6 +6,12 @@ import std::collections::list;
 
 fn NodeId parse_stmt(Parser* p)
 {
+	if (p.at_end())
+	{
+		p.error("expected a statement before end of file");
+		uint last = p.toks.len() > 0 ? (uint)p.toks.len() - 1 : 0;
+		return p.ast.add(ERROR_STMT, last, last, last);
+	}
 	if (!p.enter()) return p.sync_stmt();
 	defer p.leave();
 	uint first = p.pos;
@@ -40,7 +46,9 @@ fn NodeId parse_stmt(Parser* p)
 		case CT_ASSERT: return parse_ct_line_stmt(p, CT_ASSERT);
 		case CT_ERROR: return parse_ct_line_stmt(p, CT_ERROR);
 		case CT_EXPAND: return parse_ct_line_stmt(p, CT_EXPAND);
-		case CT_TYPE_IDENT: return parse_ct_type_stmt(p);
+		case CT_TYPE_IDENT:
+			if (p.peek_type(1) == EQ) return parse_ct_type_stmt(p);
+			return parse_decl_stmt(p);
 		default:
 			if (p.peek_type() == CONST_IDENT && p.peek_type(1) == COLON)
 			{
@@ -495,6 +503,19 @@ fn NodeId make_block(Parser* p, List{NodeId} kids) @local
 	// cursor (for example `$else $endif`), which belongs to its parent.
 	uint first = items.len ? p.ast.node(items[0]).first_tok : (p.pos ? p.pos - 1 : 0);
 	uint last = items.len ? p.ast.node(items[items.len - 1]).last_tok : first;
+	uint token_count = (uint)p.toks.len();
+	if (token_count == 0)
+	{
+		first = 0;
+		last = 0;
+	}
+	else
+	{
+		uint final_token = token_count - 1;
+		if (first > final_token) first = final_token;
+		if (last > final_token) last = final_token;
+		if (last < first) last = first;
+	}
 	return p.ast.add(BLOCK, first, first, last, range[0], range[1]);
 }
 
