@@ -1304,7 +1304,17 @@ fn NodeId parse_const(Parser* p) @local
 }
 
 <*
- `(static|tlocal|extern)? optional_type IDENT ((',' IDENT)* | ('=' expr)?) opt_attributes ';'`.
+ `(static|tlocal|extern)? optional_type IDENT (',' IDENT)* opt_attributes ('=' expr)? ';'`.
+
+ Order matters here and is easy to get backwards: `opt_attributes` comes
+ AFTER the whole name list and BEFORE the `=`, not after the `=` --
+ confirmed against the real compiler's parse_global_declaration, which
+ parses all of `IDENT (',' IDENT)*` first, then attributes, then `'='` if
+ present. `tlocal bool x @private = false;` is a real corpus shape that
+ the old (attrs-after-everything) order broke: it never finds a
+ multi-decl comma and never finds a bare `=` right after the name either
+ (since `@private` sits in between), so both branches silently do
+ nothing and `@private = false` falls through unparsed.
 *>
 fn NodeId parse_global(Parser* p) @local
 {
@@ -1323,21 +1333,20 @@ fn NodeId parse_global(Parser* p) @local
 	if (has_name1) names.push(p.finish(IDENT, name1, name1));
 	if (!has_name1) name1 = first;
 
+	while (p.match(COMMA))
+	{
+		uint ntok = p.pos;
+		if (!p.expect(IDENT, "expected a variable name")) break;
+		names.push(p.finish(IDENT, ntok, ntok));
+	}
+
+	NodeId[] attrs = parse_attributes(p);
+
 	NodeId init = NONE;
 	if (p.match(EQ))
 	{
 		init = parse_expr(p);
 	}
-	else
-	{
-		while (p.match(COMMA))
-		{
-			uint ntok = p.pos;
-			if (!p.expect(IDENT, "expected a variable name")) break;
-			names.push(p.finish(IDENT, ntok, ntok));
-		}
-	}
-	NodeId[] attrs = parse_attributes(p);
 	p.expect(EOS, "expected ';'");
 
 	List{NodeId} kids;
