@@ -1126,8 +1126,8 @@ fn NodeId parse_try_catch_operand(Parser* p) @local
 	if (p.peek_type() == IDENT && p.peek_type(1) == EQ)
 	{
 		uint name_tok = p.advance();
-		uint eq = p.advance();
 		NodeId id_node = p.finish(IDENT, name_tok, name_tok);
+		uint eq = p.advance();
 		NodeId rhs = parse_expr(p, Prec.RELATIONAL);
 		return p.finish(ASSIGN, eq, first, id_node, rhs);
 	}
