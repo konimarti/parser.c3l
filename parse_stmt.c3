@@ -272,10 +272,52 @@ fn NodeId parse_optional_label(Parser* p) @local
 fn NodeId parse_condition(Parser* p) @local
 {
 	p.expect(LPAREN, "expected '('");
-	NodeId cond = parse_expr(p);
-	while (p.match(COMMA)) parse_expr(p);
+	NodeId cond = parse_condition_list(p);
 	p.expect(RPAREN, "expected ')' after condition");
 	return cond;
+}
+
+fn NodeId parse_condition_list(Parser* p) @local
+{
+	NodeId cond = parse_condition_item(p);
+	while (p.at(COMMA))
+	{
+		uint comma = p.advance();
+		NodeId right = parse_condition_item(p);
+		cond = p.ast.add(BINARY, comma, p.ast.node(cond).first_tok,
+			p.ast.node(right).last_tok, cond, right);
+	}
+	return cond;
+}
+
+fn NodeId parse_condition_item(Parser* p) @local
+{
+	uint first = p.pos;
+	if (p.at(VAR))
+	{
+		p.advance(); uint name = p.pos;
+		if (!p.at(IDENT) && !p.at(CT_IDENT))
+		{
+			p.error("expected a variable name in condition");
+			return p.sync_stmt();
+		}
+		p.advance(); p.expect(EQ, "expected '=' in variable condition");
+		NodeId value = parse_expr(p);
+		return p.finish(VAR_DECL, name, first, NONE, value);
+	}
+	if (looks_like_local_decl(p) || (p.at(CT_TYPE_IDENT) && p.peek_type(1) != EQ))
+	{
+		NodeId ty = parse_type(p); uint name = p.pos;
+		if (!p.at(IDENT) && !p.at(CT_IDENT))
+		{
+			p.error("expected a local name after condition type");
+			return p.sync_stmt();
+		}
+		p.advance(); NodeId value = NONE;
+		if (p.match(EQ)) value = parse_expr(p);
+		return p.finish(VAR_DECL, name, first, ty, value);
+	}
+	return parse_expr(p);
 }
 
 fn NodeId parse_if_stmt(Parser* p) @local
@@ -330,7 +372,7 @@ fn NodeId parse_for_stmt(Parser* p) @local
 	else if (is_local_decl_start(p.peek_type())) { kids.push(parse_decl_stmt(p)); }
 	else { kids.push(parse_expr(p)); while (p.match(COMMA)) parse_expr(p); p.expect(EOS, "expected ';' after for initializer"); }
 	if (p.at(EOS)) { p.advance(); kids.push(NONE); }
-	else { kids.push(parse_expr(p)); while (p.match(COMMA)) parse_expr(p); p.expect(EOS, "expected ';' after for condition"); }
+	else { kids.push(parse_condition_list(p)); p.expect(EOS, "expected ';' after for condition"); }
 	NodeId inc = p.at(RPAREN) ? NONE : parse_expr(p);
 	while (p.match(COMMA)) parse_expr(p); kids.push(inc);
 	p.expect(RPAREN, "expected ')' after for clauses"); kids.push(parse_stmt(p));
@@ -564,8 +606,7 @@ fn NodeId parse_ct_for_stmt(Parser* p) @local
 	if (!p.at(EOS)) init = parse_ct_for_clause(p);
 	while (p.match(COMMA)) parse_expr(p);
 	p.expect(EOS, "expected ';' after $for initializer");
-	if (!p.at(EOS)) cond = parse_expr(p);
-	while (p.match(COMMA)) parse_expr(p);
+	if (!p.at(EOS)) cond = parse_condition_list(p);
 	p.expect(EOS, "expected ';' after $for condition");
 	if (!p.at(COLON)) inc = parse_expr(p);
 	while (p.match(COMMA)) parse_expr(p);
