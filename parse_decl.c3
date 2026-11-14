@@ -1194,7 +1194,13 @@ fn NodeId parse_typedef(Parser* p) @local
 	p.expect(EQ, "expected '='");
 	p.match(INLINE);
 	NodeId target = parse_type(p);
-	while (p.at(AT_IDENT)) p.advance(); // '@align(...)' and similar: no dedicated slot
+	// '@align(...)' and similar trailing attributes: reuse parse_attribute
+	// exactly as parse_attributes already does, rather than just skipping
+	// the AT_IDENT token and leaving its optional '(arg, ...)' list for
+	// the ';' check to choke on.
+	List{NodeId} trailing_attrs;
+	trailing_attrs.tinit();
+	while (p.at(AT_IDENT)) trailing_attrs.push(parse_attribute(p));
 	p.expect(EOS, "expected ';'");
 
 	List{NodeId} kids;
@@ -1202,6 +1208,7 @@ fn NodeId parse_typedef(Parser* p) @local
 	kids.push(target);
 	foreach (i : interfaces) kids.push(i);
 	foreach (a : attrs) kids.push(a);
+	foreach (a : trailing_attrs.to_tarray()) kids.push(a);
 	NodeId[<2>] range = p.ast.add_children(kids.to_tarray());
 	return p.finish(TYPEDEF_DECL, name, first, range[0], range[1]);
 }
