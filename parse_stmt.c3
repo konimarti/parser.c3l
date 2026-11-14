@@ -285,7 +285,7 @@ fn NodeId parse_decl_stmt(Parser* p) @local
 		skip_stmt_attributes(p);
 		NodeId init = NONE;
 		if (p.match(EQ)) init = parse_expr(p);
-		decls.push(p.finish(VAR_DECL, name, first, init));
+		decls.push(p.finish(VAR_DECL, name, first, NONE, init));
 	} while (p.match(COMMA));
 	if (!p.expect(EOS, "expected ';'")) return p.sync_stmt();
 	NodeId[] kids = decls.to_tarray();
