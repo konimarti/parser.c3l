@@ -24,6 +24,7 @@
  | TRY_EXPR/CATCH_EXPR  | keyword        | operand        | NONE           |
  | FORCE_UNWRAP/RETHROW | `!!` / `!`     | operand        | NONE           |
  | SPLAT                | `...`          | operand        | NONE           |
+| ARG                  | `:` / `=`      | name           | value          |
  | WHILE                | `while`        | condition      | body           |
  | DO                   | `do`           | body           | condition/NONE |
  | CASE                 | `case`         | label expr     | body           |
