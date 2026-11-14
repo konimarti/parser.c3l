@@ -477,9 +477,30 @@ fn NodeId parse_param(Parser* p) @local
 <* `'(' parameters ')'`: a plain function/attrdef/fn-type parameter list. *>
 fn NodeId[] parse_parameters(Parser* p)
 {
+	if (!p.expect(LPAREN, "expected '('"))
+	{
+		List{NodeId} empty;
+		empty.tinit();
+		return empty.to_tarray();
+	}
+	NodeId[] params = parse_param_list(p);
+	p.expect(RPAREN, "expected ')'");
+	return params;
+}
+
+<*
+ The bare comma-separated parameter list, without the surrounding parens --
+ shared with `parse_expr.c3`'s call-argument grammar: `call_arg_list ::=
+ opt_arg_list (';' parameters)?` lets a call site declare typed block
+ parameters for a trailing macro body, e.g.
+ `@loop_over_addresses(ai; NativeSocket sockfd, AddrInfo* ai_candidate) { ... }`
+ in lib/std/net/tcp.c3. The caller owns the parens (or the `;` and `)` that
+ bound this list in the call-argument case); this just parses `parameters`.
+*>
+fn NodeId[] parse_param_list(Parser* p)
+{
 	List{NodeId} out;
 	out.tinit();
-	if (!p.expect(LPAREN, "expected '('")) return out.to_tarray();
 	while (!p.at(RPAREN) && !p.at(EOS) && !p.at_end())
 	{
 		uint before = p.pos;
@@ -487,7 +508,6 @@ fn NodeId[] parse_parameters(Parser* p)
 		if (p.pos == before) p.advance();
 		if (!p.match(COMMA)) break;
 	}
-	p.expect(RPAREN, "expected ')'");
 	return out.to_tarray();
 }
 

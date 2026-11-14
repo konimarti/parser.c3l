@@ -24,6 +24,7 @@
  | TRY_EXPR/CATCH_EXPR  | keyword        | operand        | NONE           |
  | FORCE_UNWRAP/RETHROW | `!!` / `!`     | operand        | NONE           |
  | SPLAT                | `...`          | operand        | NONE           |
+| ARG                  | `:` / `=`      | name           | value          |
  | WHILE                | `while`        | condition      | body           |
  | DO                   | `do`           | body           | condition/NONE |
  | CASE                 | `case`         | label expr     | body           |
@@ -64,7 +65,20 @@
  | Kind                  | children                                      |
  |-----------------------|-----------------------------------------------|
  | BLOCK                 | statements...                                 |
- | CALL                  | callee, argument...                           |
+ | CALL                  | callee, argument... (incl. a trailing macro   |
+ |                       | body-parameter `PARAM`... from a call site's  |
+ |                       | `; parameters` clause, a call-attribute       |
+ |                       | (`@inline`/`@pure`/`@noinline`) as a leaf     |
+ |                       | `CT_IDENT_EXPR`..., and/or a trailing         |
+ |                       | compound-statement BLOCK -- all told apart    |
+ |                       | from plain argument exprs by kind)            |
+ | CT_CALL               | parent, generic argument... -- an explicit    |
+ |                       | generic instantiation of a non-type primary,  |
+ |                       | `ident{args}` (grammar.y's `base_expr         |
+ |                       | generic_expr`), e.g. `clamp_length{$Typeof    |
+ |                       | (self)}(...)`. A TYPE_IDENT primary's `{...}` |
+ |                       | is different: that's part of the type itself  |
+ |                       | (TYPE_GENERIC, via parse_type), not this.      |
  | INIT_LIST             | element...                                    |
  | IF                    | condition, then, else-or-NONE                 |
  | TERNARY               | condition, then, else                         |
@@ -365,6 +379,7 @@ fn bool NodeKind.is_list_bearing(self)
 	{
 		case BLOCK:
 		case CALL:
+		case CT_CALL:
 		case INIT_LIST:
 		case IF:
 		case TERNARY:
