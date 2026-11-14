@@ -24,6 +24,7 @@
  | TRY_EXPR/CATCH_EXPR  | keyword        | operand        | NONE           |
  | FORCE_UNWRAP/RETHROW | `!!` / `!`     | operand        | NONE           |
  | SPLAT                | `...`          | operand        | NONE           |
+| ARG                  | `:` / `=`      | name           | value          |
  | WHILE                | `while`        | condition      | body           |
  | DO                   | `do`           | body           | condition/NONE |
  | CASE                 | `case`         | label expr     | body           |
@@ -34,19 +35,32 @@
  | EXPR_STMT            | first token    | expression     | NONE           |
  | VAR_DECL             | the name       | type / NONE    | init / NONE    |
  | FN_DECL / MACRO_DECL | the name       | SIGNATURE      | body / NONE    |
- | MODULE / IMPORT      | the keyword    | PATH node      | NONE           |
- | PARAM                | the name       | type / NONE    | default / NONE |
- | MEMBER               | the name       | type           | NONE           |
  | TYPE_PTR / OPTIONAL  | `*` / `?`      | inner type     | NONE           |
  | TYPE_ARRAY / _SLICE  | `[`            | element type   | length / NONE  |
+ | TYPE_VEC             | `[<`           | element type   | length / NONE  |
+ | TYPE_EXPR            | `$typeof` etc. | operand expr   | NONE           |
  | leaves (IDENT, PATH, |                |                |                |
  | literals, TYPE_BASE, | the token      | NONE           | NONE           |
- | TYPE_NAME, ERROR_*)  |                |                |                |
+ | TYPE_INFERRED,       |                |                |                |
+ | ERROR_*)             |                |                |                |
+
+ **`TYPE_NAME` is a deliberate exception to the leaf bucket above:** a named
+ type may carry a module-path qualifier (`std::io::SomeType`), so its `lhs` is
+ the qualifying `PATH` node, or `NONE` for an unqualified name. Phase 0's stub
+ never built a qualified name, so this is a from-scratch definition, not a
+ change to a shape anything depends on.
+
+ | Kind      | tok           | lhs                | rhs  |
+ |-----------|---------------|--------------------|------|
+ | TYPE_NAME | the type name | qualifier PATH/NONE | NONE |
 
  **Shape 2 - a child list.** `lhs` is the start index into `Ast.extra` and
  `rhs` is the count. Reach them only through `Ast.children`, never by indexing
  `extra`. Each kind has a fixed prefix, then a variadic tail where noted;
- absent slots are `NONE` so positions stay stable.
+ absent slots are `NONE` so positions stay stable. Several kinds below use a
+ "typed tail": entries are told apart by `Ast.kind(child)` rather than by
+ position, because the count of each kind of entry varies and threading extra
+ counts through every caller would not buy anything no consumer needs yet.
 
  | Kind                  | children                                      |
  |-----------------------|-----------------------------------------------|
@@ -59,21 +73,53 @@
  | FOREACH / FOREACH_R   | collection, body, variable...                 |
  | SWITCH / CT_SWITCH    | subject, case...                              |
  | SLICE                 | object, low-or-NONE, high-or-NONE             |
- | SIGNATURE             | return type, parameter...                     |
- | STRUCT_DECL / UNION_  | member...                                     |
- | DECL / BITSTRUCT_DECL |                                               |
- | ENUM_DECL             | constant...                                   |
- | INTERFACE_DECL        | member...                                     |
- | ENUM_CONST            | value...                                      |
- | ATTR                  | argument...                                   |
+ | SIGNATURE             | return type-or-NONE, method type-or-NONE,     |
+ |                       | parameter `PARAM`... (incl. a trailing macro  |
+ |                       | body param whose `tok` is an `AT_IDENT`),     |
+ |                       | attribute `ATTR`...                           |
+ | STRUCT_DECL / UNION_  | implemented-interface `TYPE_*`..., own        |
+ | DECL / BITSTRUCT_DECL | attribute `ATTR`..., then member... (`MEMBER` |
+ |                       | or a nested anonymous STRUCT_DECL/UNION_DECL/ |
+ |                       | BITSTRUCT_DECL)                               |
+ | ENUM_DECL / CONSTDEF  | implemented-interface `TYPE_*`..., own        |
+ | / CONSTSET            | attribute `ATTR`..., enum parameter `PARAM`...|
+ |                       | constant `ENUM_CONST`...                      |
+ | INTERFACE_DECL        | parent interface `TYPE_*`..., own attribute   |
+ |                       | `ATTR`..., method `FN_DECL`...                |
+ | ENUM_CONST            | attribute `ATTR`..., associated value...      |
+ | ATTR                  | qualifier `PATH`-or-`NONE`, argument...       |
  | LAMBDA                | SIGNATURE, body                               |
- | TYPE_FN               | return type, parameter type...                |
- | TYPE_GENERIC          | base type, argument...                        |
+ | TYPE_FN               | return type-or-NONE, parameter `PARAM`...     |
+ | TYPE_GENERIC          | base type, argument... (each parsed as an     |
+ |                       | expr, matching the real compiler's grammar)   |
  | ASM_BLOCK             | instruction...                                |
  | CT_IF                 | condition, then, else-or-NONE                 |
  | CT_FOR / CT_FOREACH   | as FOR / FOREACH                              |
  | ASSERT                | condition, message-or-NONE                    |
  | NEXTCASE              | label-or-NONE, value-or-NONE                  |
+ | MODULE                | PATH, then generic-param `IDENT`... and/or    |
+ |                       | module `ATTR`...                              |
+ | IMPORT                | repeating (PATH, `ATTR`...) groups: each      |
+ |                       | imported module path, immediately followed by |
+ |                       | that path's own attributes (`@public` etc.)   |
+ | PARAM                 | type-or-NONE, default-or-NONE, attribute      |
+ |                       | `ATTR`...                                     |
+ | MEMBER (as a struct/  | type-or-NONE, [bitstruct only: start-expr-or- |
+ | union/bitstruct child)| NONE, end-expr-or-NONE,] attribute `ATTR`...  |
+ | CONST_DECL            | type-or-NONE, init-or-NONE, attribute `ATTR`..|
+ | GLOBAL_DECL           | type-or-NONE, init-or-NONE, name `IDENT`...   |
+ |                       | (>=1), attribute `ATTR`...                    |
+ | FAULTDEF              | fault-name `IDENT`...                         |
+ | ATTRDEF / ATTRMACRO_  | declared parameter `PARAM`..., attribute      |
+ | DECL                  | `ATTR`... (both the attrs before `=` and the  |
+ |                       | aliased attribute list after it)              |
+ | CT_INCLUDE            | filename expr                                 |
+ | CT_EXPAND             | expr                                          |
+ | CT_ECHO_DECL          | expr                                          |
+ | CT_ASSERT_DECL        | condition, message-or-NONE, extra-arg...      |
+ | CT_ERROR_DECL         | message, extra-arg...                         |
+ | TYPEDEF_DECL          | target type, implemented-interface `TYPE_*`...|
+ | ALIAS_DECL            | value/type/PATH node, attribute `ATTR`...     |
 
  `is_list_bearing` is the single source of truth for which shape a kind uses,
  and every kind added must appear in it and in one of the tables above, in the
@@ -346,6 +392,24 @@ fn bool NodeKind.is_list_bearing(self)
 		case CT_FOREACH:
 		case ASSERT:
 		case NEXTCASE:
+		case MODULE:
+		case IMPORT:
+		case PARAM:
+		case MEMBER:
+		case CONST_DECL:
+		case GLOBAL_DECL:
+		case FAULTDEF:
+		case ATTRDEF:
+		case ATTRMACRO_DECL:
+		case CONSTDEF:
+		case CONSTSET:
+		case CT_INCLUDE:
+		case CT_EXPAND:
+		case CT_ECHO_DECL:
+		case CT_ASSERT_DECL:
+		case CT_ERROR_DECL:
+		case TYPEDEF_DECL:
+		case ALIAS_DECL:
 			return true;
 		default:
 			return false;

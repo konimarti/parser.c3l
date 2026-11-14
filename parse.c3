@@ -230,13 +230,59 @@ fn bool Parser.enter(&self)
 fn void Parser.leave(&self) @inline => self.depth--;
 
 <*
- Close a node that began at `first`: its span runs to the last consumed token.
+ Close a node that began at `first`: its span runs from `first` to the
+ last consumed token, widened on BOTH ends if needed to cover every
+ child's span.
+
+ The widening matters on a path that records an error without consuming a
+ token: `self.pos` has not moved past the token a child's span already
+ reaches, so the naive `self.pos - 1` would make the parent's span narrower
+ than its own child's on the high end -- and a child built from a type or
+ sub-expression parsed before `first` was captured can reach earlier than
+ `first` on the low end (docs/DESIGN.md section 6, invariant 1). Fixed once
+ here rather than requiring every one of ~30 call sites across three lanes
+ to get the bookkeeping right.
 *>
 fn NodeId Parser.finish(&self, NodeKind kind, uint tok, uint first,
                         NodeId lhs = NONE, NodeId rhs = NONE)
 {
 	uint last = self.pos > first ? self.pos - 1 : first;
-	return self.ast.add(kind, tok, first, last, lhs, rhs);
+	uint[<2>] span = self.widen_to_children(first, last, kind, lhs, rhs);
+	return self.ast.add(kind, tok, span[0], span[1], lhs, rhs);
+}
+
+<*
+ See `Parser.finish`. Interprets lhs/rhs per the node's actual shape and
+ returns [widened_first, widened_last].
+*>
+fn uint[<2>] Parser.widen_to_children(&self, uint first, uint last, NodeKind kind, NodeId lhs, NodeId rhs)
+{
+	if (kind.is_list_bearing())
+	{
+		if (!rhs) return { first, last };
+		for (sz i = (sz)lhs; i < (sz)lhs + (sz)rhs; i++)
+		{
+			NodeId child = self.ast.extra[i];
+			if (child == NONE) continue;
+			Node* n = self.ast.node(child);
+			if (n.first_tok < first) first = n.first_tok;
+			if (n.last_tok > last) last = n.last_tok;
+		}
+		return { first, last };
+	}
+	if (lhs != NONE)
+	{
+		Node* n = self.ast.node(lhs);
+		if (n.first_tok < first) first = n.first_tok;
+		if (n.last_tok > last) last = n.last_tok;
+	}
+	if (rhs != NONE)
+	{
+		Node* n = self.ast.node(rhs);
+		if (n.first_tok < first) first = n.first_tok;
+		if (n.last_tok > last) last = n.last_tok;
+	}
+	return { first, last };
 }
 
 // --- Translation unit -------------------------------------------------------
