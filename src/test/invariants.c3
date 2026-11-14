@@ -1,5 +1,5 @@
 <*
- Structural invariants on a parsed tree. See docs/DESIGN.md section 6.
+ Structural invariants on a parsed tree.
 
  These catch the parser bugs that corpus conformance misses. Invariant 3
  (content representation) is the one that earns its keep: it makes "we

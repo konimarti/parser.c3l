@@ -1,11 +1,11 @@
 <*
  Token collection: drains `c3::lexer` once per file into flat arrays.
 
- FROZEN INTERFACE. See docs/DESIGN.md section 2.
+ FROZEN INTERFACE.
 
  The parser walks `code`, the non-trivia stream, and never sees comments or
- contracts. Trivia stays addressable in `all` so that suppression comments can
- be found and contracts read on demand with `lexer::ContractLexer` — contracts
+ contracts. Trivia stays addressable in `all` so a consumer can still find
+ comments or read a contract on demand with `lexer::ContractLexer` — contracts
  are never nodes in the AST.
 *>
 module c3::parser;
@@ -115,9 +115,9 @@ fn String TokenList.text_at(&self, uint i) @inline => self.tok(i).text;
  Walks back over blank lines and ordinary comments, and stops at the first
  code token. Returns NO_TOKEN when the declaration has no contract.
 
- This is the only bridge between contracts and the rest of the tool: the
- Phase 4 contract checks take this token's lexeme and run
- `lexer::ContractLexer` over it. See docs/DESIGN.md section 2.
+ This is the only bridge between contracts and the rest of a consumer: a
+ contract check takes this token's lexeme and runs `lexer::ContractLexer`
+ over it.
 *>
 fn uint TokenList.contract_before(&self, uint code_idx)
 {

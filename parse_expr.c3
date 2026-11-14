@@ -1,9 +1,8 @@
 <*
  Expression grammar.
 
- LANE 1A (agy). Precedence climbing per docs/DESIGN.md section 3, postfix/call/
- member/subscript/slice, initializer lists, lambdas, try/catch operand grammar
- and $-expressions.
+ Precedence climbing, postfix/call/member/subscript/slice, initializer
+ lists, lambdas, try/catch operand grammar and $-expressions.
 *>
 module c3::parser;
 
@@ -751,7 +750,7 @@ fn NodeId parse_postfix(Parser* p, NodeId lhs) @local
 			// TokenType, so any text is accepted here; being permissive on
 			// the exact name costs nothing and this parser never validates
 			// attribute names anyway. Each becomes a leaf child so the
-			// AT_IDENT token is still represented (docs/DESIGN.md section 6).
+			// AT_IDENT token is still owned by a node of its own.
 			while (p.at(AT_IDENT))
 			{
 				uint attr_first = p.pos;

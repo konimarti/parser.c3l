@@ -1,5 +1,5 @@
 <*
- Node-shape assertions for the declaration grammar (lane 1C). One @test per
+ Node-shape assertions for the declaration grammar. One @test per
  grammar area, following parse_test.c3's style: parse a snippet, then assert
  node kinds/shape via Ast.node()/Ast.children().
 *>

@@ -1,4 +1,4 @@
-<* Statement grammar; see grammar.y and DESIGN.md section 4. *>
+<* Statement grammar; see c3c's resources/grammar/grammar.y. *>
 module c3::parser;
 
 import c3::lexer;
@@ -690,9 +690,8 @@ fn NodeId parse_asm_stmt(Parser* p) @local
  guards forward progress the same way `parse_block` does: a construct that
  desyncs the token stream (see `parse_for_stmt`'s declaration-init fix,
  which this guard would otherwise have let spin forever on) must still
- terminate, even if the resulting tree is wrong. See docs/DESIGN.md
- section 4 and the Phase 1 gate (test/parser/conformance.c3), which is
- what caught this.
+ terminate, even if the resulting tree is wrong. The conformance/resilience
+ gate (src/test/conformance.c3) is what caught this.
 *>
 fn NodeId parse_ct_if_stmt(Parser* p) @local
 {

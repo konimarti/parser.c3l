@@ -1,7 +1,7 @@
 <*
  Declaration and top-level grammar.
 
- LANE 1C (claude). module/import/fn/macro/attrmacro/attrdef/struct/union/
+ module/import/fn/macro/attrmacro/attrdef/struct/union/
  bitstruct/enum/constdef/constset/interface/typedef/alias/const/global/
  faultdef, parameter lists, attributes, generic parameters and the
  compile-time top-level constructs ($include/$expand/$assert/$echo/$error).
@@ -187,8 +187,8 @@ fn NodeId sync_member(Parser* p) @local
  input, since the missing name usually means everything after it fails to
  match too), the node's span freezes at or before that position while
  `tok` points past it -- `tok` escaping the node's own `[first_tok,
- last_tok]` range, which is exactly what docs/DESIGN.md section 6's first
- invariant forbids. `fallback` must be a token already known to be
+ last_tok]` range, which breaks the invariant that `first_tok <= tok <=
+ last_tok` for every node. `fallback` must be a token already known to be
  consumed -- the construct's own opening keyword, almost always.
 *>
 fn uint expect_name(Parser* p, TokenType t, String what, uint fallback) @local
@@ -279,8 +279,9 @@ fn NodeId parse_attribute(Parser* p) @local
  One attribute argument: a `constant_expr`, or an operator-overload token
  sequence (`@operator(+)`, `@operator([])`, `@operator(&[])`,
  `@operator([]=)`). The operator forms are punctuation, not expressions --
- docs/DESIGN.md section 6 exempts punctuation from the content invariant --
- so they are consumed without a node rather than invented a leaf kind for.
+ the content invariant exempts punctuation and keywords from needing a leaf
+ of their own -- so they are consumed without a node rather than inventing
+ a leaf kind for them.
 *>
 fn NodeId parse_attribute_arg(Parser* p) @local
 {
@@ -699,8 +700,8 @@ fn NodeId parse_func_or_macro_body(Parser* p) @local
 		// A short body whose expression is itself a call with a trailing
 		// block (`=> @pool() { ... }`) is already terminated by that `}`;
 		// the real compiler discards the ';' in exactly that case. Rather
-		// than reach into lane 1A's CALL shape to detect it, just make the
-		// ';' optional here -- permissive on malformed input either way.
+		// than reach into the CALL shape in parse_expr.c3 to detect it, just
+		// make the ';' optional here -- permissive on malformed input either way.
 		p.match(EOS);
 		return value;
 	}
@@ -1221,16 +1222,15 @@ fn NodeId parse_typedef(Parser* p) @local
  `alias ListType = IS_SLICE ??? Type : Type*;` (a `???` compile-time
  ternary) and `alias EnumSetType = type_for_enum_elements(ENUM_COUNT);`
  (a call) are both common in the corpus, and neither is a `type`
- production at all. But always using `parse_expr` is worse in practice:
- lane 1A's expression grammar does not yet accept a bare type name with a
- `*` or `{...}` postfix as a primary expression, and `alias X = Y*;` /
- `alias X = Y{Z};` are far more common than the expression-only forms.
- So: dispatch on whether the RHS *looks* type-shaped
- (`looks_like_type_start`) and call `parse_type` only then, `parse_expr`
- otherwise. This loses nothing `parse_type` alone could do and gains the
- call/ternary/other-expression cases that lane 1A already supports
- structurally (CALL, qualified paths) -- it only still fails on `???`,
- which lane 1A hasn't implemented yet either way.
+ production at all. But always using `parse_expr` is worse in practice: the
+ expression grammar does not accept a bare type name with a `*` or `{...}`
+ postfix as a primary expression, and `alias X = Y*;` / `alias X = Y{Z};`
+ are far more common than the expression-only forms. So: dispatch on
+ whether the RHS *looks* type-shaped (`looks_like_type_start`) and call
+ `parse_type` only then, `parse_expr` otherwise. This loses nothing
+ `parse_type` alone could do and gains the call/ternary/other-expression
+ cases `parse_expr` already supports structurally (CALL, `???`, qualified
+ paths).
 *>
 fn NodeId parse_alias(Parser* p) @local
 {

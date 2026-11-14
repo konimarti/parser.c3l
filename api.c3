@@ -1,12 +1,9 @@
 <*
- The public surface of the standalone parser.
+ The public surface of the parser.
 
- FROZEN INTERFACE. See docs/DESIGN.md section 1.5.
-
- This is the whole library as far as consumers are concerned. It may depend
- only on std and c3::lexer; it must never name a c3vet type. Lifting
- src/parser/ into its own parser.c3l is then a copy plus a manifest, with no
- code changes.
+ FROZEN INTERFACE: this is the whole library as far as consumers are
+ concerned. It depends only on std and c3::lexer, and names no type outside
+ this library.
 *>
 module c3::parser;
 

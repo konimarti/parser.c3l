@@ -3,10 +3,16 @@
 A standalone parser for the [C3 programming language](https://c3-lang.org/).
 It turns C3 source into a concrete, inspectable AST, built specifically for
 tools that read code rather than compile it: linters, formatters, refactoring
-tools, an LSP. C3 had no reusable parser before this — every tool that needed
-one built its own, partial version.
+tools. Implemented in pure C3, depending only on
+[lexer.c3l](https://github.com/konimarti/lexer.c3l).
 
-Implemented in pure C3, depending only on [lexer.c3l](https://github.com/konimarti/lexer.c3l).
+For most production tooling today — syntax highlighting, editor integration,
+incremental re-parsing while typing — [tree-sitter-c3](https://github.com/c3lang/tree-sitter-c3)
+is the mature, battle-tested choice; it already powers `c3-lsp` and C3 support
+in Neovim and Emacs. This library fills a different gap: a dependency-free
+parser for tools that are themselves written in C3 and want a real AST
+without an FFI/C toolchain, checked directly against the compiler's own
+grammar rather than a separately maintained one.
 
 ## Features
 
@@ -59,8 +65,10 @@ without one, those specific tests report it and skip rather than fail.
 ## History
 
 Originally built inside [c3vet](https://github.com/konimarti/c3vet), a vet
-tool for C3, and carved out into its own library once it had proven itself —
-see that project's `docs/DESIGN.md` section 1.5 for the reasoning.
+tool for C3, and carved out into its own library once it had proven itself.
+Before this, C3 had no reusable parser: `c3f` built its own bespoke token
+model, and `c3c-fuzz` reached for tree-sitter, for lack of a native one.
+c3vet was its first consumer, never its owner.
 
 ## License
 

@@ -1,8 +1,8 @@
 <*
- The c3vet abstract syntax tree: a flat arena of nodes addressed by index.
+ The C3 abstract syntax tree: a flat arena of nodes addressed by index.
 
- FROZEN INTERFACE. See docs/DESIGN.md section 1.5 and docs/WORKPLAN.md rule 1.
- Lane owners consume this file and do not edit it; propose changes instead.
+ FROZEN INTERFACE. Consumers read this file; a change to it is a breaking
+ change to the library.
 
  ## The field contract
 
@@ -46,9 +46,7 @@
 
  **`TYPE_NAME` is a deliberate exception to the leaf bucket above:** a named
  type may carry a module-path qualifier (`std::io::SomeType`), so its `lhs` is
- the qualifying `PATH` node, or `NONE` for an unqualified name. Phase 0's stub
- never built a qualified name, so this is a from-scratch definition, not a
- change to a shape anything depends on.
+ the qualifying `PATH` node, or `NONE` for an unqualified name.
 
  | Kind      | tok           | lhs                | rhs  |
  |-----------|---------------|--------------------|------|
@@ -139,8 +137,8 @@
  same commit.
 
  Every node carries `first_tok`/`last_tok` covering its whole subtree, so a
- diagnostic gets an exact range without recomputation and the span-coverage
- invariant (docs/DESIGN.md section 6) is checkable.
+ diagnostic gets an exact range without recomputation and span nesting is
+ checkable.
 *>
 module c3::parser;
 

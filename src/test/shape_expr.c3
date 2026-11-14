@@ -1,7 +1,7 @@
 <*
  Expression grammar node shape assertions.
 
- LANE 1A tests per docs/WORKPLAN.md Phase 1 gate:
+ Expression grammar coverage:
    - Precedence climbing (arithmetic, bitwise, relational, logical, ternary, assign)
    - Postfix chains (calls, subscripts, slices, member access, ++, --, !, !!)
    - Initializer lists (positional, designated, named, no_init_list)

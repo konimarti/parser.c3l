@@ -1,18 +1,19 @@
 <*
  Parser state, token helpers and recovery.
 
- FROZEN INTERFACE. See docs/DESIGN.md section 4 and docs/WORKPLAN.md rule 1.
+ FROZEN INTERFACE.
 
- Lane owners implement the four grammar entry points in their own files and
- reach the token stream only through the helpers here. The four points are:
+ The grammar is split across four entry points, each in its own file, and
+ each reaches the token stream only through the helpers here:
 
-   parse_expr(Parser*, Prec)   lane 1A, parse_expr.c3
-   parse_stmt(Parser*)         lane 1B, parse_stmt.c3
-   parse_block(Parser*)        lane 1B, parse_stmt.c3
-   parse_decl(Parser*)         lane 1C, parse_decl.c3
-   parse_type(Parser*)         lane 1C, parse_type.c3
+   parse_expr(Parser*, Prec)   parse_expr.c3
+   parse_stmt(Parser*)         parse_stmt.c3
+   parse_block(Parser*)        parse_stmt.c3
+   parse_decl(Parser*)         parse_decl.c3
+   parse_type(Parser*)         parse_type.c3
 
- Lanes call each other only through those. Agree no other cross-lane entry.
+ They call each other only through those entry points, never by reaching
+ into one another's internals.
 *>
 module c3::parser;
 
@@ -53,7 +54,7 @@ struct Parser
 	 Set while parsing an expression in statement position, where a `{` opens
 	 a block rather than an initializer list. This is what c3c's grammar
 	 expresses by duplicating the whole precedence chain as `*_stmt_expr`;
-	 we thread one flag instead. See docs/DESIGN.md section 3.
+	 we thread one flag instead.
 	*>
 	bool            no_init_list;
 	uint            depth;
@@ -206,8 +207,8 @@ fn NodeId Parser.sync_decl(&self)
 
 <*
  An error node spanning `first` through the token before the cursor.
- Spans stay valid even for recovery nodes, so the invariants in
- docs/DESIGN.md section 6 hold on malformed files too.
+ Spans stay valid even for recovery nodes, so span nesting holds on
+ malformed files too.
 *>
 fn NodeId Parser.error_node(&self, NodeKind kind, uint first)
 {
@@ -239,9 +240,9 @@ fn void Parser.leave(&self) @inline => self.depth--;
  reaches, so the naive `self.pos - 1` would make the parent's span narrower
  than its own child's on the high end -- and a child built from a type or
  sub-expression parsed before `first` was captured can reach earlier than
- `first` on the low end (docs/DESIGN.md section 6, invariant 1). Fixed once
- here rather than requiring every one of ~30 call sites across three lanes
- to get the bookkeeping right.
+ `first` on the low end, which would break span nesting (child span ⊆
+ parent span). Fixed once here rather than requiring every call site that
+ builds a node to get the bookkeeping right.
 *>
 fn NodeId Parser.finish(&self, NodeKind kind, uint tok, uint first,
                         NodeId lhs = NONE, NodeId rhs = NONE)

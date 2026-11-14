@@ -1,7 +1,7 @@
 <*
  Type grammar.
 
- LANE 1C (claude). Base types, named types (with optional module-path
+ Base types, named types (with optional module-path
  qualifier and generic arguments), pointer/array/slice/vector suffixes, the
  optional (`?`) suffix, `$typeof`/`$typefrom`, the `$Type` compile-time
  placeholder, and the `fn` function-type grammar used by `alias`

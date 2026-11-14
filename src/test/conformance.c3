@@ -1,8 +1,7 @@
 <*
- The Phase 1 gate: run the parser over the real C3 corpus.
+ The conformance/resilience gate: run the parser over the real C3 corpus.
 
- See docs/DESIGN.md section 3 ("the corpus is two corpora, not one") and
- docs/ROADMAP.md section 3. Two separate requirements, not one:
+ Two separate requirements, not one -- the corpus is two corpora, not one:
 
    - CONFORMANCE corpus (642 files: c3c/lib + c3c/test/unit, all valid C3):
      every file must parse with ZERO ERROR_* nodes and all four structural
@@ -18,8 +17,7 @@
  environment variable (default: /home/km/Documents/c3c). If that directory
  is not present, these tests report it and return without asserting
  anything, rather than failing on a machine that doesn't have the sibling
- repo -- but on the orchestrator's own machine, where it always exists,
- this IS the gate.
+ repo -- but wherever that checkout exists, this IS the gate.
 *>
 module c3::parser::conformance;
 
@@ -138,7 +136,7 @@ fn void Summary.report(&self, String label)
 }
 
 <*
- The Phase 1 gate. Fails the test unless every conformance-corpus file
+ The conformance gate. Fails the test unless every conformance-corpus file
  parses with zero errors and intact invariants.
 *>
 fn void conformance_corpus_is_clean() @test
@@ -149,7 +147,7 @@ fn void conformance_corpus_is_clean() @test
 
 	if (!path::exists(path::tnew(base) ?? (Path){}))
 	{
-		io::printfn("C3C_CHECKOUT '%s' not found; skipping the Phase 1 gate on this machine", base);
+		io::printfn("C3C_CHECKOUT '%s' not found; skipping the conformance gate on this machine", base);
 		return;
 	}
 
