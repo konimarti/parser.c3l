@@ -35,12 +35,12 @@ struct ParseResult
 fn ParseResult parse(Allocator a, String src)
 {
 	ParseResult r;
-	r.toks.init(a);
-	r.ast.init(a);
+	r.toks.init(a, src.len);
 	r.errors.init(a);
 
 	r.toks.lex(src);
 	r.lex_failed = r.toks.lex_failed;
+	r.ast.init(a, r.toks.len());
 
 	Parser p = {
 		.toks   = &r.toks,

@@ -39,10 +39,20 @@ struct TokenList
 fn bool is_trivia(TokenType t) @inline
 	=> t == LINE_COMMENT || t == BLOCK_COMMENT || t == CONTRACT || t == EOL;
 
-fn void TokenList.init(&self, Allocator a)
+<*
+ `size_hint`, if given, is the source length in bytes: both lists default
+ to capacity 16 and grow by doubling, which is already amortized O(1) per
+ push, but still copies the whole array on every doubling -- reserving
+ once up front for a rough token-count estimate avoids that for any file
+ past a trivial size. Token count is consistently a few times smaller
+ than byte count for real C3 source (short identifiers and single-byte
+ punctuation both lex to one token each), so these divisors are a
+ deliberate overestimate: wasted slack here is far cheaper than a reallocation.
+*>
+fn void TokenList.init(&self, Allocator a, sz size_hint = 0)
 {
-	self.all.init(a);
-	self.code.init(a);
+	self.all.init(a, size_hint > 0 ? size_hint / 3 : 16);
+	self.code.init(a, size_hint > 0 ? size_hint / 4 : 16);
 }
 
 fn void TokenList.free(&self)

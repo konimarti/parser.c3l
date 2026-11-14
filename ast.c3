@@ -321,11 +321,20 @@ struct Ast
 	NodeId       root;
 }
 
-<* Prepare an empty arena with the NONE sentinel installed at index 0. *>
-fn void Ast.init(&self, Allocator a)
+<*
+ Prepare an empty arena with the NONE sentinel installed at index 0.
+
+ `token_count_hint`, if given, reserves capacity up front instead of
+ growing from the default 16 by doubling -- see `TokenList.init`'s own
+ doc comment for why. Most tokens are consumed without creating their own
+ node (punctuation, keywords already captured by their parent), so one
+ node per token is itself an overestimate; `extra` (only list-bearing
+ nodes' children) gets half that.
+*>
+fn void Ast.init(&self, Allocator a, sz token_count_hint = 0)
 {
-	self.nodes.init(a);
-	self.extra.init(a);
+	self.nodes.init(a, token_count_hint > 0 ? token_count_hint : 16);
+	self.extra.init(a, token_count_hint > 0 ? token_count_hint / 2 : 16);
 	self.root = NONE;
 	// Index 0 must be the NONE sentinel so that NodeId 0 reads as "absent".
 	self.nodes.push({ .kind = NONE_NODE });
