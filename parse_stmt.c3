@@ -83,7 +83,38 @@ fn bool looks_like_local_decl(Parser* p) @local
 			if (p.peek_type(at) == RPAREN) depth--;
 			at++;
 		}
-		return depth == 0 && (p.peek_type(at) == IDENT || p.peek_type(at) == CT_IDENT);
+		if (depth != 0) return false;
+		while (true)
+		{
+			TokenType suffix = p.peek_type(at);
+			if (suffix == STAR || suffix == QUESTION)
+			{
+				at++;
+				continue;
+			}
+			if (suffix == LBRACKET)
+			{
+				int brackets = 1; at++;
+				while (brackets > 0 && p.peek_type(at) != EOF)
+				{
+					if (p.peek_type(at) == LBRACKET) brackets++;
+					if (p.peek_type(at) == RBRACKET) brackets--;
+					at++;
+				}
+				if (brackets != 0) return false;
+				continue;
+			}
+			if (suffix == LVEC)
+			{
+				at++;
+				while (p.peek_type(at) != RVEC && p.peek_type(at) != EOF) at++;
+				if (p.peek_type(at) != RVEC) return false;
+				at++;
+				continue;
+			}
+			break;
+		}
+		return p.peek_type(at) == IDENT || p.peek_type(at) == CT_IDENT;
 	}
 	if (first != IDENT || p.peek_type(1) != SCOPE) return false;
 	uint at = 0;
@@ -107,7 +138,7 @@ fn bool is_expr_start(TokenType t) @local
 {
 	switch (t)
 	{
-		case IDENT: case CONST_IDENT: case TYPE_IDENT: case INTEGER: case REAL:
+		case IDENT: case CONST_IDENT: case TYPE_IDENT: case CT_IDENT: case INTEGER: case REAL:
 		case STRING: case CHAR_LITERAL: case BYTES: case TRUE: case FALSE: case NULL:
 		case LPAREN: case AMP: case AND: case STAR: case BIT_NOT: case BIT_XOR:
 		case BANG: case BANGBANG: case PLUS: case MINUS: case PLUSPLUS: case MINUSMINUS:
@@ -170,8 +201,9 @@ fn NodeId parse_var_stmt(Parser* p) @local
 	bool ct_type = p.at(CT_TYPE_IDENT);
 	bool ct_name = p.at(CT_IDENT);
 	name = p.advance();
+	if (!ct_type && !ct_name) parse_attributes(p);
 	NodeId init = NONE;
-	if (p.match(EQ)) { init = ct_type ? parse_type(p) : parse_expr(p); }
+	if (p.match(EQ)) { init = parse_expr(p); }
 	else if (!ct_type && !ct_name) { p.error("expected '=' in variable declaration"); return p.sync_stmt(); }
 	if (!p.expect(EOS, "expected ';'")) return p.sync_stmt();
 	return p.finish(VAR_DECL, name, first, NONE, init);
@@ -770,8 +802,10 @@ fn NodeId parse_ct_line_stmt(Parser* p, TokenType marker) @local
 fn NodeId parse_ct_type_stmt(Parser* p) @local
 {
 	uint first = p.pos; uint kw = p.advance(); p.expect(EQ, "expected '=' after compile-time type");
-	parse_type(p); p.expect(EOS, "expected ';' after compile-time type");
-	return p.finish(CT_EXPAND, kw, first);
+	NodeId value = parse_expr(p); p.expect(EOS, "expected ';' after compile-time type");
+	NodeId[] kids = { value };
+	NodeId[<2>] range = p.ast.add_children(kids);
+	return p.finish(CT_EXPAND, kw, first, range[0], range[1]);
 }
 
 fn NodeId parse_expr_stmt(Parser* p) @local
