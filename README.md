@@ -9,10 +9,8 @@ tools. Implemented in pure C3, depending only on
 For most production tooling today — syntax highlighting, editor integration,
 incremental re-parsing while typing — [tree-sitter-c3](https://github.com/c3lang/tree-sitter-c3)
 is the mature, battle-tested choice; it already powers `c3-lsp` and C3 support
-in Neovim and Emacs. This library fills a different gap: a dependency-free
-parser for tools that are themselves written in C3 and want a real AST
-without an FFI/C toolchain, checked directly against the compiler's own
-grammar rather than a separately maintained one.
+in Neovim and Emacs. This library fills a different gap: a
+parser in pure C3 for tools that are themselves written in C3.
 
 ## Features
 
@@ -61,14 +59,6 @@ c3c test
 The conformance/resilience test suite looks for a sibling `c3c` checkout via
 the `C3C_CHECKOUT` environment variable (default `/home/km/Documents/c3c`);
 without one, those specific tests report it and skip rather than fail.
-
-## History
-
-Originally built inside [c3vet](https://github.com/konimarti/c3vet), a vet
-tool for C3, and carved out into its own library once it had proven itself.
-Before this, C3 had no reusable parser: `c3f` built its own bespoke token
-model, and `c3c-fuzz` reached for tree-sitter, for lack of a native one.
-c3vet was its first consumer, never its owner.
 
 ## License
 
